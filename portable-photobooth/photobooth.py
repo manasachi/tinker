@@ -37,6 +37,31 @@ class Session:
         self.photos.append(path)
         return path
 
+    def prepare_print_layout(self) -> Path:
+        from PIL import Image, ImageOps
+
+        if len(self.photos) != self.photo_count:
+            raise ValueError("Capture all photos before preparing the print layout.")
+        strip_width, height = 600, 1800
+        margin, gap = 30, 30
+        photo_width = strip_width - 2 * margin
+        photo_height = (height - 2 * margin - gap * (self.photo_count - 1)) // self.photo_count
+        strip = Image.new("RGB", (strip_width, height), "white")
+        for index, path in enumerate(self.photos):
+            with Image.open(path) as photo:
+                oriented = ImageOps.exif_transpose(photo).convert("RGB")
+                fitted = ImageOps.fit(
+                    oriented, (photo_width, photo_height),
+                    method=Image.Resampling.LANCZOS,
+                )
+                strip.paste(fitted, (margin, margin + index * (photo_height + gap)))
+        sheet = Image.new("RGB", (strip_width * 2, height), "white")
+        sheet.paste(strip, (0, 0))
+        sheet.paste(strip, (strip_width, 0))
+        path = self.directory / "print_layout.png"
+        sheet.save(path, dpi=(300, 300))
+        return path
+
 
 class PiCamera:
     """Keep camera setup, capture, and cleanup on the same worker thread."""
@@ -165,9 +190,28 @@ class PhotoBooth:
         if len(self.session.photos) < self.session.photo_count:
             self.tick(self.session.interval)
         else:
-            self.clear()
-            self.label("Your photos are ready!")
-            self.button("Review", lambda: self.show_photo(0))
+            self.status.config(text="Preparing your photo strips...")
+            self.countdown.config(text="")
+            future = self.worker.submit(self.session.prepare_print_layout)
+            self.root.after(50, self.check_layout, future)
+
+    def check_layout(self, future) -> None:
+        if self.closed:
+            return
+        if not future.done():
+            self.root.after(50, self.check_layout, future)
+            return
+        try:
+            future.result()
+        except Exception as error:
+            messagebox.showerror(
+                "Print layout failed",
+                f"Could not prepare the photo strips:\n{error}\n\n"
+                f"Your original photos remain in:\n{self.session.directory}",
+            )
+        self.clear()
+        self.label("Your photos are ready!")
+        self.button("Review", lambda: self.show_photo(0))
 
     def show_photo(self, index: int) -> None:
         from PIL import Image, ImageOps, ImageTk

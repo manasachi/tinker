@@ -21,7 +21,8 @@ not another copy of the interface.
 5. Show the selected 5/10-second countdown, then take and save the next photo.
    Repeat until exactly 3 or 4 photos have been saved. No further button presses
    are needed.
-6. Return the LCD to a **Your photos are ready!** screen with a **Review** button.
+6. Compose a print image with two identical strips side by side, then return the
+   LCD to a **Your photos are ready!** screen with a **Review** button.
    Do not display the photos until Review is tapped.
 7. Review shows the saved photos one at a time in capture order, with
    **Next/Previous** controls. A 3-photo session shows only 3 photos.
@@ -82,6 +83,9 @@ exist yet. The current program is described below.
 - Choose 3 or 4 photos and a 5 or 10 second countdown.
 - Press Start once. The app counts down before the first shot and before every
   subsequent shot, with no additional button presses.
+- After the final capture, automatically save `print_layout.png` containing two
+  identical vertical strips side by side. Both 3-photo and 4-photo layouts use
+  the same sheet size.
 - Press Review after capture, then use Next/Previous to view the photos in order,
   one at a time. A 3-photo session shows 3 photos, not 4.
 - Print is visible but disabled. **Nothing is sent to a printer yet.**
@@ -131,24 +135,46 @@ initialization/exposure settling. Capture runs off the UI thread to keep the
 screen responsive. Failed captures display an error; completed photos remain on
 disk. Photos are not automatically deleted, so monitor available storage.
 
-## Printing later
+## Print layout and future printing
+
+Each completed session saves its original JPEGs plus `print_layout.png`: a
+**1,200 x 1,800 pixel RGB image at 300 DPI**, intended for a 4 x 6-inch sheet in
+portrait orientation. Each half is a 600 x 1,800 pixel strip (nominally 2 x 6
+inches). Cut the printed sheet vertically down the center to separate the copies;
+this is not continuous-roll printing or automatic cutting.
+
+The photos appear top to bottom in capture order, with white borders and gaps.
+Three-photo layouts use taller slots; four-photo layouts use shorter slots.
+Photos are EXIF-oriented and center-cropped to fill their slots without stretching.
+Keep faces near the center, as edges may be cropped. Original JPEGs are unchanged,
+and individual-photo Review still shows the originals rather than the print crop.
+
+Composition runs on the camera worker after all captures, before Review appears.
+A layout failure displays an error but leaves the originals available for Review;
+it does not indicate that a print layout was successfully generated.
 
 Actual wireless printing requires the printer make/model and its supported
 interface. Some portable printers use vendor-only apps rather than a standard
-Linux print queue. Printing one composed strip and printing separate images are
-also different operations: paper dimensions, margins, and cutting behavior must
-be confirmed for that printer. This app currently saves individual JPEGs only;
-it does not compose a strip or submit print jobs.
+Linux print queue. Submit the composed sheet as **one print job**, not each photo
+as a separate job. Paper dimensions, scaling, borderless overscan, margins, and
+cutting behavior must be confirmed for the printer. DPI metadata alone does not
+force physical print dimensions. Print remains disabled: no jobs are submitted.
 
 ## Basic tests
+
+For step-by-step hardware and software checks, follow the
+[phased testing guide](./TESTING.md). It separates current functionality from
+future split-program, positioning-timer, and printer tests.
 
 ```sh
 python3 -m unittest -v
 ```
 
-These tests check option validation, ordered saves, exact photo counts, and camera
-failure handling without camera hardware. Touchscreen layout, actual countdown
-timing, and Picamera2 capture still need testing on the Pi.
+These tests check option validation, ordered saves, exact photo counts, camera
+failure handling, layout dimensions/DPI, duplicate strips, photo order,
+orientation, preserved originals, and layout error handling without camera
+hardware. Pillow and Tkinter must be installed. Touchscreen layout, actual
+countdown timing, and Picamera2 capture still need testing on the Pi.
 
 ## Next milestones
 
@@ -159,8 +185,9 @@ Inspired by overtinker's portable photobooth, with different controls and flow.
    10-second positioning countdown and Submit-triggered sessions.
 3. Test the complete 3/4-photo flow, countdowns, saved files, Review, and recovery
    from camera errors on the Pi.
-4. Confirm the printer model and paper dimensions, then implement strip layout
-   and wireless printing. Keep Print disabled until this works.
+4. Confirm the printer model and paper dimensions, test the composed strip
+   layout on paper, and implement wireless printing. Keep Print disabled until
+   this works.
 5. Build a ventilated case with a handle.
 
 A physical GPIO start/confirm/reject button is a possible later addition, not
