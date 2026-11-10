@@ -1,0 +1,228 @@
+"""Touchscreen photobooth for Raspberry Pi OS and a Picamera2 camera."""
+
+import argparse
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+import tkinter as tk
+from tkinter import messagebox
+from typing import Protocol
+from uuid import uuid4
+
+
+class Camera(Protocol):
+    def capture_file(self, path: str) -> None: ...
+
+
+@dataclass
+class Session:
+    photo_count: int
+    interval: int
+    directory: Path
+    photos: list[Path] = field(default_factory=list, init=False)
+
+    def __post_init__(self) -> None:
+        if self.photo_count not in (3, 4):
+            raise ValueError("Choose either 3 or 4 photos.")
+        if self.interval not in (5, 10):
+            raise ValueError("Choose either a 5 or 10 second timer.")
+
+    def capture_next(self, camera: Camera) -> Path:
+        if len(self.photos) >= self.photo_count:
+            raise ValueError("All photos in this session have already been taken.")
+        self.directory.mkdir(parents=True, exist_ok=True)
+        path = self.directory / f"photo_{len(self.photos) + 1:02d}.jpg"
+        camera.capture_file(str(path))
+        self.photos.append(path)
+        return path
+
+
+class PiCamera:
+    """Keep camera setup, capture, and cleanup on the same worker thread."""
+
+    def __init__(self) -> None:
+        self.camera = None
+
+    def capture_file(self, path: str) -> None:
+        if self.camera is None:
+            from picamera2 import Picamera2
+            from time import sleep
+
+            camera = Picamera2()
+            try:
+                camera.configure(
+                    camera.create_still_configuration(main={"size": (2304, 1296)})
+                )
+                camera.start()
+                sleep(2)  # Allow automatic exposure and white balance to settle.
+            except Exception:
+                camera.close()
+                raise
+            self.camera = camera
+        self.camera.capture_file(path)
+
+    def close(self) -> None:
+        if self.camera is not None:
+            self.camera.close()
+            self.camera = None
+
+
+class PhotoBooth:
+    def __init__(self, root: tk.Tk, output: Path, fullscreen: bool) -> None:
+        self.root = root
+        self.output = output
+        self.camera = PiCamera()
+        self.worker = ThreadPoolExecutor(max_workers=1)
+        self.session = None
+        self.closed = False
+        self.review_index = 0
+        self.image = None
+        root.title("Portable Photobooth")
+        root.geometry("800x480")
+        root.attributes("-fullscreen", fullscreen)
+        root.bind("<Escape>", lambda event: root.attributes("-fullscreen", False))
+        root.protocol("WM_DELETE_WINDOW", self.close)
+        self.frame = tk.Frame(root, padx=16, pady=12)
+        self.frame.pack(fill="both", expand=True)
+        self.show_options()
+
+    def clear(self) -> None:
+        for widget in self.frame.winfo_children():
+            widget.destroy()
+        self.image = None
+
+    def label(self, text: str, size: int = 22) -> tk.Label:
+        label = tk.Label(self.frame, text=text, font=("Arial", size))
+        label.pack(pady=8)
+        return label
+
+    def button(self, text: str, command, **options) -> tk.Button:
+        button = tk.Button(
+            self.frame, text=text, command=command, font=("Arial", 18),
+            padx=14, pady=8, **options
+        )
+        button.pack(pady=6)
+        return button
+
+    def show_options(self) -> None:
+        self.clear()
+        self.label("Portable Photobooth", 28)
+        self.count = tk.IntVar(value=4)
+        self.interval = tk.IntVar(value=5)
+        for title, variable, choices in (
+            ("Number of photos", self.count, (3, 4)),
+            ("Seconds before each photo", self.interval, (5, 10)),
+        ):
+            self.label(title, 18)
+            row = tk.Frame(self.frame)
+            row.pack()
+            for value in choices:
+                tk.Radiobutton(
+                    row, text=str(value), variable=variable, value=value,
+                    indicatoron=False, font=("Arial", 20), width=7, pady=8
+                ).pack(side="left", padx=8)
+        self.button("Start", self.start)
+
+    def start(self) -> None:
+        name = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:8]
+        self.session = Session(self.count.get(), self.interval.get(), self.output / name)
+        self.clear()
+        self.status = self.label("Get ready!", 30)
+        self.countdown = self.label("", 60)
+        self.tick(self.session.interval)
+
+    def tick(self, remaining: int) -> None:
+        if self.closed:
+            return
+        self.status.config(
+            text=f"Photo {len(self.session.photos) + 1} of {self.session.photo_count}"
+        )
+        if remaining:
+            self.countdown.config(text=str(remaining))
+            self.root.after(1000, self.tick, remaining - 1)
+        else:
+            self.countdown.config(text="Smile!", font=("Arial", 40))
+            future = self.worker.submit(self.session.capture_next, self.camera)
+            self.root.after(50, self.check_capture, future)
+
+    def check_capture(self, future) -> None:
+        if self.closed:
+            return
+        if not future.done():
+            self.root.after(50, self.check_capture, future)
+            return
+        try:
+            future.result()
+        except Exception as error:
+            messagebox.showerror(
+                "Capture failed",
+                f"Could not capture the photo:\n{error}\n\n"
+                f"Any completed photos remain in:\n{self.session.directory}",
+            )
+            self.show_options()
+            return
+        if len(self.session.photos) < self.session.photo_count:
+            self.tick(self.session.interval)
+        else:
+            self.clear()
+            self.label("Your photos are ready!")
+            self.button("Review", lambda: self.show_photo(0))
+
+    def show_photo(self, index: int) -> None:
+        from PIL import Image, ImageOps, ImageTk
+
+        try:
+            with Image.open(self.session.photos[index]) as photo:
+                preview = ImageOps.exif_transpose(photo)
+                preview.thumbnail((
+                    max(1, self.frame.winfo_width() - 40),
+                    max(1, self.frame.winfo_height() - 170),
+                ))
+                image = ImageTk.PhotoImage(preview)
+        except Exception as error:
+            messagebox.showerror("Review failed", f"Could not display photo:\n{error}")
+            return
+        self.clear()
+        self.review_index = index
+        self.image = image
+        self.label(f"Photo {index + 1} of {len(self.session.photos)}", 18)
+        tk.Label(self.frame, image=self.image).pack(expand=True)
+        row = tk.Frame(self.frame)
+        row.pack(pady=6)
+        for text, step in (("Previous", -1), ("Next", 1)):
+            destination = index + step
+            tk.Button(
+                row, text=text, font=("Arial", 18), padx=12, pady=8,
+                state="normal" if 0 <= destination < len(self.session.photos) else "disabled",
+                command=lambda target=destination: self.show_photo(target),
+            ).pack(side="left", padx=6)
+        tk.Button(
+            row, text="Print (coming soon)", state="disabled",
+            font=("Arial", 18), padx=12, pady=8,
+        ).pack(side="left", padx=6)
+        self.button("New session", self.show_options)
+
+    def close(self) -> None:
+        self.closed = True
+        cleanup = self.worker.submit(self.camera.close)
+        self.worker.shutdown(wait=False)
+        self.root.destroy()
+        try:
+            cleanup.result()
+        except Exception as error:
+            raise RuntimeError("Could not close the camera cleanly.") from error
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--fullscreen", action="store_true")
+    parser.add_argument("--output", type=Path, default=Path(__file__).parent / "photos")
+    args = parser.parse_args()
+    root = tk.Tk()
+    PhotoBooth(root, args.output, args.fullscreen)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
