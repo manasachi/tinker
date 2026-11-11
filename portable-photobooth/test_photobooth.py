@@ -1,4 +1,5 @@
 from pathlib import Path
+import io
 import json
 import os
 import tempfile
@@ -8,10 +9,39 @@ from concurrent.futures import Future
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 import sys
+import subprocess
+import wave
 
 from PIL import Image, ImageChops
 
-from photobooth import PhotoBooth, PiCamera, Session, lcd_geometry, place_on_lcd, show_error
+from photobooth import (
+    PhotoBooth, PiCamera, Session, lcd_geometry, place_on_lcd, show_error,
+    shutter_wav, play_shutter_sound,
+)
+
+
+class ShutterSoundTests(unittest.TestCase):
+    def test_click_is_a_short_nonempty_pcm_wave(self):
+        with wave.open(io.BytesIO(shutter_wav()), "rb") as audio:
+            self.assertEqual(audio.getnchannels(), 1)
+            self.assertEqual(audio.getsampwidth(), 2)
+            self.assertEqual(audio.getframerate(), 22050)
+            self.assertAlmostEqual(audio.getnframes() / audio.getframerate(), .06)
+            self.assertTrue(any(audio.readframes(audio.getnframes())))
+
+    def test_playback_uses_default_audio_device_with_timeout(self):
+        with patch("photobooth.subprocess.run") as run:
+            play_shutter_sound()
+        run.assert_called_once_with(
+            ["aplay", "-q"], input=shutter_wav(), check=True,
+            capture_output=True, timeout=2,
+        )
+
+    def test_audio_device_error_is_not_hidden(self):
+        error = subprocess.CalledProcessError(1, ["aplay"], stderr=b"No audio device")
+        with patch("photobooth.subprocess.run", side_effect=error):
+            with self.assertRaisesRegex(RuntimeError, "No audio device"):
+                play_shutter_sound()
 
 
 class LCDLaunchTests(unittest.TestCase):
@@ -105,6 +135,14 @@ class SessionTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     Session(count, interval, Path("unused"))
 
+    def test_strip_count_defaults_to_one_sheet_and_rejects_unsupported_quantities(self):
+        self.assertEqual(Session(3, 5, Path("unused")).strip_count, 2)
+        self.assertEqual(Session(3, 5, Path("unused")).sheet_count, 1)
+        for strips in (0, 1, 3, 6):
+            with self.subTest(strips=strips):
+                with self.assertRaisesRegex(ValueError, "2 or 4 photo strips"):
+                    Session(3, 5, Path("unused"), strip_count=strips)
+
     def test_failed_capture_is_not_added_to_review(self):
         class BrokenCamera:
             def capture_file(self, path: str) -> None:
@@ -129,9 +167,10 @@ class SessionTests(unittest.TestCase):
                 Image.new("RGB", (800, 450), colors[self.index]).save(path)
                 self.index += 1
 
-        for count in (3, 4):
-            with self.subTest(count=count), tempfile.TemporaryDirectory() as directory:
-                session = Session(count, 5, Path(directory))
+        for count, strips in ((3, 2), (3, 4), (4, 2), (4, 4)):
+            with self.subTest(count=count, strips=strips), tempfile.TemporaryDirectory() as directory:
+                session = Session(count, 5, Path(directory), strip_count=strips)
+                self.assertEqual(session.sheet_count, strips // 2)
                 camera = ColorCamera()
                 for _ in range(count):
                     session.capture_next(camera)
@@ -203,13 +242,18 @@ class LayoutFlowTests(unittest.TestCase):
         app.active = True
         app.previewing = True
         app.preview_ready = True
+        app.shutter_sound = False
+        app.sound_worker = None
         for name in ("root", "worker", "camera", "session", "status", "countdown",
-                     "clear", "label", "button"):
+                     "clear", "label", "button", "sound_warning"):
             setattr(app, name, Mock())
         app.root.overrideredirect.return_value = False
         app.session.photos = []
         app.session.photo_count = 3
         app.session.interval = 5
+        app.session.strip_count = 2
+        app.strip_count = Mock()
+        app.strip_count.get.return_value = 4
         return app
 
     def test_start_uses_fixed_positioning_countdown_for_either_interval(self):
@@ -230,6 +274,8 @@ class LayoutFlowTests(unittest.TestCase):
                 app.tick.assert_called_once_with(15, app.session)
                 app.request_preview.assert_called_once_with(app.session)
                 self.assertEqual(app.session.interval, interval)
+                self.assertEqual(app.session.strip_count, 4)
+                self.assertEqual(app.session.sheet_count, 2)
 
     def test_first_capture_waits_fifteen_seconds_then_uses_selected_interval(self):
         for count in (3, 4):
@@ -271,7 +317,7 @@ class LayoutFlowTests(unittest.TestCase):
                     for previous, current in zip(capture_times, capture_times[1:]):
                         self.assertAlmostEqual(current - previous, interval + 0.05)
 
-    def test_final_capture_prepares_layout_before_review(self):
+    def test_final_capture_prepares_layout_without_stopping_live_preview(self):
         app = self.make_app()
         app.session.photos = [Path(f"photo_{i}.jpg") for i in range(3)]
         app.session.photo_count = 3
@@ -283,9 +329,9 @@ class LayoutFlowTests(unittest.TestCase):
         app.root.after.assert_called_once_with(
             50, app.check_layout, app.worker.submit.return_value, app.session
         )
-        self.assertFalse(app.previewing)
+        self.assertTrue(app.previewing)
 
-    def test_layout_failure_is_visible_and_originals_remain_reviewable(self):
+    def test_layout_failure_is_visible_and_originals_remain_saved(self):
         app = self.make_app()
         future = Future()
         future.set_exception(OSError("Disk full"))
@@ -293,16 +339,80 @@ class LayoutFlowTests(unittest.TestCase):
             app.check_layout(future, app.session)
         showerror.assert_called_once()
         self.assertIn("Disk full", showerror.call_args.args[1])
-        self.assertEqual(app.button.call_args.args[0], "Review")
+        self.assertEqual(app.button.call_args.args[0], "Don't print")
+        self.assertTrue(app.previewing)
 
-    def test_successful_layout_offers_review(self):
+    def test_successful_layout_offers_only_print_choices_with_live_preview(self):
         app = self.make_app()
         future = Future()
         future.set_result(Path("print_layout.png"))
         with patch("photobooth.messagebox.showerror") as showerror:
             app.check_layout(future, app.session)
         showerror.assert_not_called()
-        self.assertEqual(app.button.call_args.args[0], "Review")
+        self.assertEqual(
+            [call.args[0] for call in app.button.call_args_list],
+            ["Print 2 strips (coming soon)", "Don't print"],
+        )
+        self.assertEqual(app.button.call_args_list[0].kwargs["state"], "disabled")
+        self.assertTrue(app.active)
+        self.assertTrue(app.previewing)
+        app.clear.assert_not_called()
+        app.countdown.pack_forget.assert_called_once()
+
+    def test_finished_session_cannot_capture_extra_photos(self):
+        app = self.make_app()
+        app.session.photos = [Path(f"photo_{i}.jpg") for i in range(3)]
+        app.tick(0, app.session)
+        app.worker.submit.assert_not_called()
+        app.root.after.assert_not_called()
+
+    def test_sound_is_queued_only_after_successful_capture(self):
+        app = self.make_app()
+        app.shutter_sound = True
+        app.sound_worker = Mock()
+        app.tick = Mock()
+        future = Future()
+        app.check_capture(future, app.session)
+        app.sound_worker.submit.assert_not_called()
+        future.set_result(Path("photo.jpg"))
+        app.check_capture(future, app.session)
+        app.sound_worker.submit.assert_called_once_with(play_shutter_sound)
+        app.tick.assert_called_once_with(5, app.session)
+
+    def test_failed_capture_does_not_make_a_shutter_sound(self):
+        app = self.make_app()
+        app.shutter_sound = True
+        app.sound_worker = Mock()
+        app.show_options = Mock()
+        future = Future()
+        future.set_exception(OSError("Camera disconnected"))
+        with patch("photobooth.messagebox.showerror"):
+            app.check_capture(future, app.session)
+        app.sound_worker.submit.assert_not_called()
+
+    def test_sound_failure_is_visible_without_aborting_the_photo_session(self):
+        app = self.make_app()
+        app.shutter_sound = True
+        future = Future()
+        future.set_exception(FileNotFoundError("aplay not installed"))
+        with self.assertLogs("photobooth", level="WARNING") as logs:
+            app.check_sound(future, app.session)
+        self.assertIn("aplay not installed", logs.output[0])
+        self.assertFalse(app.shutter_sound)
+        self.assertTrue(app.active)
+        app.sound_warning.config.assert_called_once_with(text="Sound unavailable")
+
+    def test_old_sound_failure_does_not_change_a_new_session(self):
+        app = self.make_app()
+        old_session = app.session
+        app.session = Mock()
+        app.shutter_sound = True
+        future = Future()
+        future.set_exception(OSError("Audio device disconnected"))
+        with self.assertLogs("photobooth", level="WARNING"):
+            app.check_sound(future, old_session)
+        self.assertTrue(app.shutter_sound)
+        app.sound_warning.config.assert_not_called()
 
     def test_preview_renders_and_schedules_only_one_next_frame(self):
         app = self.make_app()
@@ -440,7 +550,76 @@ class DisplayLayoutTests(unittest.TestCase):
         self.assertLessEqual(root.winfo_reqwidth(), width)
         self.assertLessEqual(root.winfo_reqheight(), height)
 
-    def test_options_preview_and_review_fit_all_display_sizes(self):
+    def test_completed_session_keeps_refreshing_live_view_until_dont_print(self):
+        class StreamingCamera:
+            def __init__(self):
+                self.frames = 0
+
+            def preview_image(self):
+                self.frames += 1
+                return Image.new("RGB", (320, 180), "blue" if self.frames % 2 else "green")
+
+            def capture_file(self, path):
+                Image.new("RGB", (320, 180), "red").save(path)
+
+            def close(self):
+                pass
+
+        for count, interval in ((3, 5), (4, 10)):
+            with self.subTest(count=count), tempfile.TemporaryDirectory() as output:
+                root = tk.Tk()
+                root.withdraw()
+                app = PhotoBooth(root, Path(output), False, portrait=True)
+                app.camera = StreamingCamera()
+                app.count.set(count)
+                app.interval.set(interval)
+                app.strip_count.set(4)
+                schedule = root.after
+                result = {"finished": False, "first_frame": None}
+
+                def finish():
+                    for callback in root.tk.call("after", "info"):
+                        root.after_cancel(callback)
+                    app.close()
+
+                def observe():
+                    choices = [
+                        widget for widget in app.frame.winfo_children()
+                        if isinstance(widget, tk.Button) and widget.cget("text") == "Don't print"
+                    ]
+                    if choices:
+                        image = app.preview_label.cget("image")
+                        if result["first_frame"] is None:
+                            result["first_frame"] = image
+                        elif image and image != result["first_frame"]:
+                            choices[0].invoke()
+                            result["finished"] = not app.active and not app.previewing
+                            finish()
+                            return
+                    schedule(20, observe)
+
+                try:
+                    with patch.object(
+                        root, "after",
+                        side_effect=lambda delay, callback, *args: schedule(
+                            10 if delay == 1000 else delay, callback, *args,
+                        ),
+                    ):
+                        schedule(0, app.start)
+                        schedule(20, observe)
+                        schedule(8000, finish)
+                        root.mainloop()
+                    self.assertTrue(result["finished"], "Live view did not refresh after completion")
+                    self.assertEqual(len(app.session.photos), count)
+                    self.assertEqual(app.session.strip_count, 4)
+                    self.assertEqual(app.session.sheet_count, 2)
+                    self.assertTrue(all(path.is_file() for path in app.session.photos))
+                    self.assertTrue((app.session.directory / "print_layout.png").is_file())
+                finally:
+                    if not app.closed:
+                        finish()
+
+    def test_options_live_preview_and_print_choices_fit_all_display_sizes(self):
         for compact, portrait, width, height in (
             (True, False, 480, 320), (False, False, 800, 480),
             (True, True, 320, 480),
@@ -451,34 +630,70 @@ class DisplayLayoutTests(unittest.TestCase):
                 app = PhotoBooth(root, Path(output), False, compact=compact, portrait=portrait)
                 try:
                     self.assert_layout_fits(root, width, height)
+                    self.assertEqual(app.strip_count.get(), 2)
+                    self.assertIn("2 strips  /  1 sheet", app.summary.get())
                     app.count.set(3)
                     app.interval.set(10)
-                    self.assertEqual(app.summary.get(), "3 photos  /  10 seconds between shots")
+                    widgets = [app.frame]
+                    strip_choices = []
+                    for widget in widgets:
+                        widgets.extend(widget.winfo_children())
+                        if isinstance(widget, tk.Radiobutton) and (
+                            str(widget.cget("variable")) == str(app.strip_count)
+                        ):
+                            strip_choices.append(widget)
+                    self.assertEqual([choice.cget("text") for choice in strip_choices], ["2", "4"])
+                    for strips, choice in zip((2, 4), strip_choices):
+                        choice.invoke()
+                        sheets = "1 sheet" if strips == 2 else "2 sheets"
+                        self.assertEqual(
+                            app.summary.get(),
+                            f"3 photos  /  10 seconds between shots\n{strips} strips  /  {sheets}",
+                        )
+                        self.assertGreaterEqual(choice.winfo_reqheight(), 40)
+                        self.assert_layout_fits(root, width, height)
                     with patch.object(app, "request_preview"), patch.object(app, "tick"):
                         app.start()
                     app.status.config(text="Get situated! Photo 1 of 4")
                     app.countdown.config(text="Smile!")
                     self.assert_layout_fits(root, width, height)
                     session = app.session
+                    self.assertEqual(session.strip_count, 4)
+                    self.assertEqual(session.sheet_count, 2)
                     session.directory.mkdir()
                     for index in range(3):
                         path = session.directory / f"photo_{index}.jpg"
                         Image.new("RGB", (800, 450), "green").save(path)
                         session.photos.append(path)
-                    app.previewing = False
                     future = Future()
                     future.set_result(Path("print_layout.png"))
                     app.check_layout(future, session)
                     self.assert_layout_fits(root, width, height)
-                    for index in range(3):
-                        app.show_photo(index)
-                        self.assert_layout_fits(root, width, height)
-                        self.assertFalse(any(
-                            isinstance(widget, tk.Label)
-                            and str(widget.cget("text")).startswith("Photo ")
-                            for widget in app.frame.winfo_children()
-                        ))
-                    app.show_options()
+                    self.assertTrue(app.active)
+                    self.assertTrue(app.previewing)
+                    self.assertTrue(app.preview_label.winfo_exists())
+                    choices = [
+                        widget for widget in app.frame.winfo_children()
+                        if isinstance(widget, tk.Button)
+                    ]
+                    self.assertEqual(
+                        [button.cget("text") for button in choices],
+                        [
+                            "Print 4 strips (soon)" if compact else "Print 4 strips (coming soon)",
+                            "Don't print",
+                        ],
+                    )
+                    self.assertEqual(str(choices[0].cget("state")), "disabled")
+                    frame = Future()
+                    frame.set_result(Image.new("RGB", (640, 360), "blue"))
+                    app.check_preview(frame, session)
+                    self.assertIsNotNone(app.image)
+                    choices[1].invoke()
+                    self.assertFalse(app.active)
+                    self.assertFalse(app.previewing)
+                    self.assertTrue(all(path.is_file() for path in session.photos))
+                    self.assertEqual(session.strip_count, 4)
+                    self.assertEqual(app.strip_count.get(), 2)
                     self.assert_layout_fits(root, width, height)
                 finally:
                     app.close()

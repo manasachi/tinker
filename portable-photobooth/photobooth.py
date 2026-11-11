@@ -4,13 +4,18 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
+import io
 import json
+import logging
+import math
 from pathlib import Path
+import struct
 import subprocess
 import tkinter as tk
 from tkinter import messagebox
 from typing import Protocol
 from uuid import uuid4
+import wave
 
 
 FOREST = "#386641"
@@ -19,6 +24,36 @@ LIME = "#a7c957"
 CREAM = "#f2e8cf"
 RED = "#bc4749"
 POSITIONING_SECONDS = 15
+
+
+def shutter_wav() -> bytes:
+    rate = 22050
+    count = int(rate * 0.06)
+    samples = [
+        int(6000 * (1 - i / count) ** 3 * (
+            math.sin(2 * math.pi * 1800 * i / rate)
+            + 0.5 * math.sin(2 * math.pi * 3200 * i / rate)
+        ))
+        for i in range(count)
+    ]
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(rate)
+        audio.writeframes(struct.pack(f"<{count}h", *samples))
+    return buffer.getvalue()
+
+
+def play_shutter_sound() -> None:
+    try:
+        subprocess.run(
+            ["aplay", "-q"], input=shutter_wav(), check=True,
+            capture_output=True, timeout=2,
+        )
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr.decode(errors="replace").strip()
+        raise RuntimeError(f"Shutter sound playback failed: {detail or error}") from error
 
 
 def lcd_geometry() -> tuple[int, int, int, int]:
@@ -89,6 +124,7 @@ class Session:
     photo_count: int
     interval: int
     directory: Path
+    strip_count: int = 2
     photos: list[Path] = field(default_factory=list, init=False)
 
     def __post_init__(self) -> None:
@@ -96,6 +132,12 @@ class Session:
             raise ValueError("Choose either 3 or 4 photos.")
         if self.interval not in (5, 10):
             raise ValueError("Choose either a 5 or 10 second timer.")
+        if self.strip_count not in (2, 4):
+            raise ValueError("Choose either 2 or 4 photo strips.")
+
+    @property
+    def sheet_count(self) -> int:
+        return self.strip_count // 2
 
     def capture_next(self, camera: Camera) -> Path:
         if len(self.photos) >= self.photo_count:
@@ -187,7 +229,7 @@ class PiCamera:
 class PhotoBooth:
     def __init__(
         self, root: tk.Tk, output: Path, fullscreen: bool, compact: bool = False,
-        portrait: bool = False,
+        portrait: bool = False, shutter_sound: bool = False,
     ) -> None:
         self.root = root
         self.output = output
@@ -201,12 +243,13 @@ class PhotoBooth:
         )
         self.camera = PiCamera((480, 270) if self.compact else (640, 360))
         self.worker = ThreadPoolExecutor(max_workers=1)
+        self.shutter_sound = shutter_sound
+        self.sound_worker = ThreadPoolExecutor(max_workers=1) if shutter_sound else None
         self.session = None
         self.closed = False
         self.active = False
         self.previewing = False
         self.preview_ready = False
-        self.review_index = 0
         self.image = None
         root.title("Portable Photobooth")
         root.geometry(
@@ -259,35 +302,39 @@ class PhotoBooth:
         ).pack(pady=(4, 10 if self.compact else 16))
         self.count = tk.IntVar(value=4)
         self.interval = tk.IntVar(value=5)
+        self.strip_count = tk.IntVar(value=2)
         cards = tk.Frame(self.frame, bg=CREAM)
         cards.pack(fill="x", padx=0 if self.compact else 12)
-        cards.columnconfigure(0 if self.portrait else (0, 1), weight=1, uniform="options")
-        for column, (title, hint, variable, choices, suffix) in enumerate((
-            ("01  THE STRIP", "How many photos?", self.count, (3, 4), "photos"),
-            ("02  THE PACE", "Seconds between photos", self.interval, (5, 10), "sec"),
+        cards.columnconfigure(0 if self.portrait else (0, 1, 2), weight=1, uniform="options")
+        for column, (title, hint, variable, choices) in enumerate((
+            ("01  THE PHOTOS", "How many photos?", self.count, (3, 4)),
+            ("02  THE PACE", "Seconds between photos", self.interval, (5, 10)),
+            ("03  THE COPIES", "How many strips?", self.strip_count, (2, 4)),
         )):
             card = tk.Frame(
                 cards, bg=CREAM, padx=6 if self.compact else 12,
-                pady=8 if self.compact else 12,
+                pady=4 if self.portrait else 8 if self.compact else 12,
                 highlightbackground=LEAF, highlightthickness=2,
             )
             card.grid(
                 row=column if self.portrait else 0,
                 column=0 if self.portrait else column,
                 sticky="nsew", padx=4 if self.compact else 6,
-                pady=4 if self.portrait else 0,
+                pady=2 if self.portrait else 0,
             )
             tk.Label(
                 card, text=title, font=self.font(11, 11, bold=True), bg=CREAM, fg=FOREST,
             ).pack(anchor="w")
             tk.Label(
                 card, text=hint, font=self.font(11, 11), bg=CREAM, fg=FOREST,
-            ).pack(anchor="w", pady=(4, 8 if self.compact else 10))
+            ).pack(
+                anchor="w", pady=(2, 4) if self.portrait else (4, 8 if self.compact else 10)
+            )
             row = tk.Frame(card, bg=CREAM)
             row.pack(fill="x")
             for value in choices:
                 choice = tk.Radiobutton(
-                    row, text=str(value) if self.compact else f"{value} {suffix}",
+                    row, text=str(value),
                     variable=variable, value=value,
                     indicatoron=False, font=self.font(17, 17, bold=True),
                     bg=CREAM, fg=FOREST, selectcolor=LIME,
@@ -295,11 +342,11 @@ class PhotoBooth:
                     relief="sunken", offrelief="flat", borderwidth=2,
                     highlightbackground=LEAF, highlightcolor=FOREST,
                     highlightthickness=2, padx=4 if self.compact else 8,
-                    pady=10 if self.compact else 12,
+                    pady=8 if self.portrait else 10 if self.compact else 12,
                 )
                 choice.pack(side="left", fill="x", expand=True, padx=3)
         self.summary = tk.StringVar()
-        for variable in (self.count, self.interval):
+        for variable in (self.count, self.interval, self.strip_count):
             variable.trace_add("write", self.update_summary)
         self.update_summary()
         tk.Label(
@@ -313,15 +360,22 @@ class PhotoBooth:
         ).pack(pady=(6, 0))
 
     def update_summary(self, *_args) -> None:
+        strips = self.strip_count.get()
+        sheets = strips // 2
         self.summary.set(
-            f"{self.count.get()} photos  /  {self.interval.get()} seconds between shots"
+            f"{self.count.get()} photos  /  {self.interval.get()} seconds between shots\n"
+            f"{strips} strips  /  {sheets} {'sheet' if sheets == 1 else 'sheets'}"
         )
 
     def start(self) -> None:
         if self.closed or self.active:
             return
+        self.shutter_sound = self.sound_worker is not None
         name = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:8]
-        self.session = Session(self.count.get(), self.interval.get(), self.output / name)
+        self.session = Session(
+            self.count.get(), self.interval.get(), self.output / name,
+            strip_count=self.strip_count.get(),
+        )
         self.active = True
         self.previewing = True
         self.preview_ready = False
@@ -336,6 +390,9 @@ class PhotoBooth:
             header, text="", font=self.font(36, 32, bold=True), bg=CREAM, fg=RED
         )
         self.countdown.pack(side="top" if self.portrait else "right", padx=8)
+        self.sound_warning = tk.Label(
+            header, text="", font=self.font(11, 11), bg=CREAM, fg=RED,
+        )
         self.preview_frame = tk.Frame(self.frame, bg=FOREST)
         self.preview_frame.pack(fill="both", expand=True)
         self.preview_label = tk.Label(
@@ -386,7 +443,7 @@ class PhotoBooth:
         self.root.after(250 if self.compact else 150, self.request_preview, session)
 
     def tick(self, remaining: int, session: Session) -> None:
-        if not self.is_active(session):
+        if not self.is_active(session) or len(session.photos) >= session.photo_count:
             return
         self.status.config(
             text=(
@@ -426,16 +483,32 @@ class PhotoBooth:
             )
             self.show_options()
             return
+        if self.shutter_sound and self.sound_worker is not None:
+            sound = self.sound_worker.submit(play_shutter_sound)
+            self.root.after(50, self.check_sound, sound, session)
         if len(session.photos) < session.photo_count:
             self.tick(session.interval, session)
         else:
-            self.previewing = False
             self.status.config(
                 text="Preparing strips..." if self.compact else "Preparing your photo strips..."
             )
             self.countdown.config(text="")
             future = self.worker.submit(session.prepare_print_layout)
             self.root.after(50, self.check_layout, future, session)
+
+    def check_sound(self, future, session: Session) -> None:
+        if not future.done():
+            if not self.closed:
+                self.root.after(50, self.check_sound, future, session)
+            return
+        try:
+            future.result()
+        except Exception as error:
+            logging.getLogger(__name__).warning("Shutter sound unavailable: %s", error)
+            if self.is_active(session):
+                self.shutter_sound = False
+                self.sound_warning.config(text="Sound unavailable")
+                self.sound_warning.pack(side="bottom")
 
     def check_layout(self, future, session: Session) -> None:
         if not self.is_active(session):
@@ -452,45 +525,15 @@ class PhotoBooth:
                 f"Could not prepare the photo strips:\n{error}\n\n"
                 f"Your original photos remain in:\n{session.directory}",
             )
-        self.active = False
-        self.clear()
-        self.label("Your photos are ready!")
-        self.button("Review", lambda: self.show_photo(0))
-
-    def show_photo(self, index: int) -> None:
-        from PIL import Image, ImageOps, ImageTk
-
-        try:
-            with Image.open(self.session.photos[index]) as photo:
-                preview = ImageOps.exif_transpose(photo)
-                preview.thumbnail((
-                    max(1, self.frame.winfo_width() - 2 * int(self.frame.cget("padx")) - 4),
-                    max(1, self.frame.winfo_height() - (110 if self.compact else 130)),
-                ))
-                image = ImageTk.PhotoImage(preview)
-        except Exception as error:
-            show_error(self.root, "Review failed", f"Could not display photo:\n{error}")
+        if not self.is_active(session):
             return
-        self.clear()
-        self.review_index = index
-        self.image = image
-        tk.Label(self.frame, image=self.image, bg=CREAM).pack(expand=True)
-        row = tk.Frame(self.frame, bg=CREAM)
-        row.pack(pady=6)
-        for text, step in (("Previous", -1), ("Next", 1)):
-            destination = index + step
-            tk.Button(
-                row, text=text, font=self.font(18, 14),
-                padx=6 if self.compact else 12, pady=8,
-                state="normal" if 0 <= destination < len(self.session.photos) else "disabled",
-                command=lambda target=destination: self.show_photo(target),
-            ).pack(side="left", padx=3 if self.compact else 6)
-        tk.Button(
-            row, text="Print (soon)" if self.compact else "Print (coming soon)",
-            state="disabled", font=self.font(18, 14),
-            padx=6 if self.compact else 12, pady=8,
-        ).pack(side="left", padx=3 if self.compact else 6)
-        self.button("New session", self.show_options)
+        self.status.config(text="Photos saved")
+        self.countdown.pack_forget()
+        availability = "soon" if self.compact else "coming soon"
+        self.button(
+            f"Print {session.strip_count} strips ({availability})", None, state="disabled",
+        )
+        self.button("Don't print", self.show_options)
 
     def close(self) -> None:
         self.closed = True
@@ -498,6 +541,8 @@ class PhotoBooth:
         self.previewing = False
         cleanup = self.worker.submit(self.camera.close)
         self.worker.shutdown(wait=False)
+        if self.sound_worker is not None:
+            self.sound_worker.shutdown(wait=False, cancel_futures=True)
         self.root.destroy()
         try:
             cleanup.result()
@@ -508,6 +553,14 @@ class PhotoBooth:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fullscreen", action="store_true")
+    parser.add_argument(
+        "--shutter-sound", action="store_true",
+        help="Play a click after successful captures through the default ALSA audio device.",
+    )
+    parser.add_argument(
+        "--test-sound", action="store_true",
+        help="Play one shutter click and exit; no camera or display required.",
+    )
     parser.add_argument(
         "--lcd", action="store_true",
         help="Fill the SPI-1 LCD with only the UI, using its current position and rotation.",
@@ -522,6 +575,12 @@ def main() -> None:
     )
     parser.add_argument("--output", type=Path, default=Path(__file__).parent / "photos")
     args = parser.parse_args()
+    if args.test_sound:
+        try:
+            play_shutter_sound()
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            parser.error(f"Cannot play shutter sound: {error}")
+        return
     try:
         geometry = lcd_geometry() if args.lcd else None
     except (OSError, subprocess.CalledProcessError, ValueError, KeyError) as error:
@@ -531,6 +590,7 @@ def main() -> None:
         root, args.output, args.fullscreen and not args.lcd,
         args.compact or args.lcd,
         args.portrait or (geometry is not None and geometry[0] < geometry[1]),
+        args.shutter_sound,
     )
     if geometry is not None:
         place_on_lcd(root, geometry)

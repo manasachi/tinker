@@ -26,7 +26,7 @@ Once the TFT shows a working desktop, launch from a terminal on that desktop:
 python3 photobooth.py --compact --fullscreen
 ```
 
-The compact layout uses pixel-sized fonts, smaller Review controls, and a
+The compact layout uses pixel-sized fonts, smaller controls, and a
 480 x 270 maximum camera preview, refreshed roughly three times per second
 depending on processing speed. Original captures and print-layout resolution
 are unchanged. If HDMI is the primary screen, automatic detection may see its
@@ -59,8 +59,16 @@ power before connecting or reseating the camera's CSI ribbon.
 
 Portrait outputs use a 320 x 480 compact layout with stacked option cards and
 countdown text. For a portrait window without LCD targeting, use `--portrait`.
-Review has no separate "Photo N of N" heading, leaving more room for the image;
-photos retain their aspect ratio.
+The guest flow has no saved-photo Review or Retake screen. It keeps the live
+camera view through the final Print / Don't print choices. The separate
+camera-free image tester still has navigation for checking supplied pictures.
+
+The options include **2 or 4 photo strips**, defaulting to 2. Each printed
+sheet contains two identical strips: 2 strips need 1 sheet, and 4 strips need
+2 copies of the same sheet. Cut the sheets after printing. This quantity is
+separate from the 3/4 photos on each strip and is retained in the session.
+The summary shows both strip and sheet quantities; the disabled Print button
+also shows the selected strip count. Actual printer integration is still pending.
 
 Ordinary SSH sessions do not inherit the desktop environment. On the current
 Pi, an SSH launch can use:
@@ -229,8 +237,8 @@ The LCD interface and camera capture should be separate programs. The LCD progra
 stays open for the entire session; its Submit button starts the capture program,
 not another copy of the interface.
 
-1. The LCD asks for **3 or 4 photos** and a **5 or 10 second interval between
-   photos**.
+1. The LCD asks for **3 or 4 photos**, a **5 or 10 second interval between
+   photos**, and **2 or 4 printed strips**.
 2. The user taps **Submit** once. Lock the choices and disable Submit so another
    session cannot start while one is running.
 3. Show **Get ready!** with a **15-second positioning countdown**, regardless of
@@ -241,13 +249,12 @@ not another copy of the interface.
 5. Show the selected 5/10-second countdown, then take and save the next photo.
    Repeat until exactly 3 or 4 photos have been saved. No further button presses
    are needed.
-6. Compose a print image with two identical strips side by side, then return the
-   LCD to a **Your photos are ready!** screen with a **Review** button.
-   Do not display the photos until Review is tapped.
-7. Review shows the saved photos one at a time in capture order, with
-   **Next/Previous** controls. A 3-photo session shows only 3 photos.
-8. Show **Print (coming soon)**, disabled for now. Do not send anything to a
-   printer. **New session** returns to the choices without deleting saved photos.
+6. Compose a print image with two identical strips side by side. Keep the
+   camera's live view on the LCD; do not switch to saved-photo review.
+7. Offer **Print (coming soon)**, disabled until printing is configured, and
+   **Don't print**. There is no Review, Previous/Next, or Retake option.
+8. **Don't print** ends the session and returns to the choices without deleting
+   saved photos. It does not replace or retake any photo in that session.
 
 Example: with 3 photos and a 5-second interval, the sequence is:
 
@@ -255,7 +262,7 @@ Example: with 3 photos and a 5-second interval, the sequence is:
 Submit -> 15-second positioning countdown -> capture/save photo 1
        -> 5-second countdown -> capture/save photo 2
        -> 5-second countdown -> capture/save photo 3
-       -> Review button -> view photos -> Print (disabled)
+       -> live view + Print (disabled) / Don't print
 ```
 
 Capture and save time is additional to the countdowns. A capture failure must
@@ -273,8 +280,8 @@ The proposed split is:
 
 | Program | Responsibility |
 | --- | --- |
-| `lcd_ui.py` (planned) | Own the Tkinter window, choices, Submit callback, countdown display, Review, photo display, and disabled Print option. |
-| `capture.py` (planned) | Own Picamera2, camera preparation, the initial 15-second wait, the selected inter-photo waits, JPEG saving, and session results. No Tkinter window. |
+| `lcd_ui.py` (planned) | Own the Tkinter window, choices, Submit callback, live-view display, countdowns, and Print / Don't print choices. |
+| `capture.py` (planned) | Own Picamera2, camera preparation, preview, timed capture, JPEG saving, and session results. Keep preview available until the LCD ends the session. No Tkinter window. |
 
 Use Python's `subprocess.Popen` from the Submit callback to launch `capture.py`
 with validated photo-count and interval arguments, plus a unique output folder.
@@ -284,8 +291,10 @@ arguments as a list without `shell=True`.
 The capture program should send newline-delimited JSON status messages over
 standard output: preparation, countdown updates, saved-photo paths, and
 completion with the ordered list of paths. Send diagnostics to standard error
-and exit nonzero on failure. The UI should display Review only after a successful
-exit with the expected number of saved photos.
+and exit nonzero on failure. The UI should display the print choices only after
+a successful capture-complete message with the expected number of saved photos.
+The camera process must remain available for live preview until the user ends
+the session; capture completion is not the same as process shutdown.
 
 Read process messages off the Tkinter thread and use a queue polled with
 `root.after(...)` to update widgets. Do not use `time.sleep()`, blocking pipe
@@ -300,10 +309,12 @@ single program. The planned filenames above do not exist yet.
 
 ## What works in the current code
 
-- A cream-and-green options screen with large photo/timer choices, a live
+- A cream-and-green options screen with large photo/timer/strip-count choices, a live
   selection summary, and a Start photo session button. The palette uses
   `#386641`, `#6a994e`, `#a7c957`, `#f2e8cf`, and `#bc4749`.
-- Choose 3 or 4 photos and a 5 or 10 second delay between photos.
+- Choose 3 or 4 photos, a 5 or 10 second delay between photos, and 2 or 4 strips.
+  The strip quantity is separate from the photo count; 4 strips require
+  2 copies of the same two-strip print sheet, not extra camera captures.
 - Press Start once. A fixed 15-second positioning countdown runs before photo 1.
   Only subsequent photos use the chosen 5/10-second delay, with no extra taps.
 - The LCD shows a live camera view during positioning and between photos, with
@@ -311,10 +322,11 @@ single program. The planned filenames above do not exist yet.
 - After the final capture, automatically save `print_layout.png` containing two
   identical vertical strips side by side. Both 3-photo and 4-photo layouts use
   the same sheet size.
-- Press Review after capture, then use Next/Previous to view the photos in order,
-  one at a time. A 3-photo session shows 3 photos, not 4.
+- Keep showing the live camera view after capture, alongside Print / Don't print.
+  No saved-photo review or retake is offered to guests.
 - Print is visible but disabled. **Nothing is sent to a printer yet.**
-- New session returns to the choices without deleting saved photos.
+- Don't print returns to the choices without deleting saved photos.
+- Optional shutter click after each successful capture; off by default.
 
 Currently, both the LCD interface and capture logic live in `photobooth.py`.
 The Start button calls `PhotoBooth.start()`, which creates the session and begins
@@ -330,14 +342,15 @@ in this first version. Use the LCD touchscreen or a mouse.
 positioning countdown and between photos. The countdown stays above the image.
 The camera starts on the background worker while the timer runs. If it is not
 ready at zero, the screen says "Waiting for camera..." before taking photo 1.
-The preview may pause briefly during a still capture; it stops after the final
-shot. Review then shows the saved photos, not a live feed.
+The preview may pause briefly during a still capture or print-layout composition.
+It continues after the final shot and alongside the print choices. It stops
+when Don't print returns to the options, or when the app closes.
 
 ```text
 CURRENT SCREEN FLOW
 Options -> live view + 15-second countdown -> capture
         -> live view + 5/10-second countdown -> capture -> ...
-        -> prepare print layout -> Review button -> saved photos
+        -> prepare print layout -> live view + Print / Don't print
 ```
 
 The preview preserves the full captured aspect ratio without mirroring or
@@ -347,6 +360,34 @@ respectively, depending on camera/processing speed. It is a framing aid,
 not a guarantee of final exposure or focus. The print layout center-crops photos
 further; print-crop guides are not implemented. Preview errors are displayed
 explicitly and return to the options, preserving any completed photos.
+
+### Optional shutter sound
+
+The KS0214 has no speaker. The Pi 3B+ can output sound through its 3.5 mm jack,
+a supported USB audio device, or HDMI. A small powered 3.5 mm speaker is enough
+for a shutter click; no extra sound board or GPIO wiring is required. Select
+the connected device in the Pi's audio settings. An available output does not
+prove that a speaker is physically connected or audible.
+
+The click uses `aplay` from `alsa-utils` (already installed on the current Pi).
+If it is missing, install that package. Test one click without a camera or GUI:
+
+```sh
+python3 photobooth.py --test-sound
+```
+
+Enable clicks in the booth with:
+
+```sh
+python3 photobooth.py --lcd --shutter-sound
+```
+
+Audio is off by default. A short click is played after each successful photo
+save, not at countdown zero or on failed captures. Playback runs on a separate
+worker with a timeout, so it cannot block camera preview or the Tk event loop.
+On playback failure, the UI shows **Sound unavailable**, the terminal logs the
+reason, and capture continues without more audio attempts in that session.
+The next session retries. Audible playback still needs a physical speaker test.
 
 ## DIY box layout
 
@@ -473,11 +514,11 @@ this is not continuous-roll printing or automatic cutting.
 The photos appear top to bottom in capture order, with white borders and gaps.
 Three-photo layouts use taller slots; four-photo layouts use shorter slots.
 Photos are EXIF-oriented and center-cropped to fill their slots without stretching.
-Keep faces near the center, as edges may be cropped. Original JPEGs are unchanged,
-and individual-photo Review still shows the originals rather than the print crop.
+Keep faces near the center, as edges may be cropped. Original JPEGs are unchanged;
+the live view shows camera framing rather than the print crop.
 
-Composition runs on the camera worker after all captures, before Review appears.
-A layout failure displays an error but leaves the originals available for Review;
+Composition runs on the camera worker after all captures, before print choices appear.
+A layout failure displays an error but preserves the original files;
 it does not indicate that a print layout was successfully generated.
 
 Actual wireless printing requires the printer make/model and its supported
@@ -510,7 +551,7 @@ Inspired by overtinker's portable photobooth, with different controls and flow.
 1. Set up Raspberry Pi 5 access and test the camera and LCD independently.
 2. Split the LCD and capture programs as described above, preserving the fixed
    15-second positioning countdown, live view, and background camera preparation.
-3. Test the complete 3/4-photo flow, countdowns, saved files, Review, and recovery
+3. Test the complete 3/4-photo flow, countdowns, saved files, print choices, and recovery
    from camera errors on the Pi.
 4. Confirm the printer model and paper dimensions, test the composed strip
    layout on paper, and implement wireless printing. Keep Print disabled until
