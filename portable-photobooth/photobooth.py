@@ -165,13 +165,9 @@ class PhotoBooth:
         self.previewing = False
         self.clear()
         tk.Label(
-            self.frame, text="MAKE A LITTLE MEMORY", font=("Arial", 10, "bold"),
-            bg=CREAM, fg=RED,
-        ).pack(pady=(4, 2))
-        tk.Label(
-            self.frame, text="Your moment, your photo strip.",
+            self.frame, text="Make a little memory",
             font=("Arial", 25, "bold"), bg=CREAM, fg=FOREST,
-        ).pack(pady=(0, 16))
+        ).pack(pady=(4, 16))
         self.count = tk.IntVar(value=4)
         self.interval = tk.IntVar(value=5)
         cards = tk.Frame(self.frame, bg=CREAM)

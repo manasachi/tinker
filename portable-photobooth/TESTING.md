@@ -82,7 +82,7 @@ python3 photobooth.py --fullscreen --output "$HOME/Pictures/photobooth-test"
 ```
 
 - [ ] Options fit the LCD and can be selected by touch.
-- [ ] Options use the cream/green palette with a red heading accent; selected
+- [ ] Options show "Make a little memory" as a large green heading; selected
       choices are highlighted in lime and have a pressed appearance.
 - [ ] Changing either choice updates the photo-count/countdown summary.
 - [ ] Select 3 photos and 5 seconds; tap Start once.
