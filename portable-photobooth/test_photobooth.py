@@ -135,6 +135,59 @@ class LayoutFlowTests(unittest.TestCase):
             setattr(app, name, Mock())
         return app
 
+    def test_start_uses_fixed_positioning_countdown_for_either_interval(self):
+        for interval in (5, 10):
+            with self.subTest(interval=interval):
+                app = self.make_app()
+                app.output = Path("unused")
+                app.count = Mock()
+                app.count.get.return_value = 3
+                app.interval = Mock()
+                app.interval.get.return_value = interval
+                app.tick = Mock()
+                app.start()
+                app.tick.assert_called_once_with(15)
+                self.assertEqual(app.session.interval, interval)
+
+    def test_first_capture_waits_fifteen_seconds_then_uses_selected_interval(self):
+        for count in (3, 4):
+            for interval in (5, 10):
+                with self.subTest(count=count, interval=interval):
+                    app = self.make_app()
+                    app.camera = Mock()
+                    app.session.photo_count = count
+                    app.session.interval = interval
+                    app.session.photos = []
+                    events = []
+                    capture_times = []
+                    now = 0
+
+                    def schedule(delay, callback, *args):
+                        events.append((now + delay / 1000, callback, args))
+
+                    def capture(camera):
+                        capture_times.append(now)
+                        app.session.photos.append(Path(f"photo_{len(capture_times)}.jpg"))
+                        return app.session.photos[-1]
+
+                    def submit(callback, *args):
+                        future = Future()
+                        future.set_result(callback(*args))
+                        return future
+
+                    app.session.capture_next.side_effect = capture
+                    app.worker.submit.side_effect = submit
+                    app.root.after.side_effect = schedule
+                    app.tick(15)
+                    app.worker.submit.assert_not_called()
+                    while events:
+                        now, callback, args = events.pop(0)
+                        callback(*args)
+                    self.assertEqual(len(capture_times), count)
+                    self.assertEqual(capture_times[0], 15)
+                    for previous, current in zip(capture_times, capture_times[1:]):
+                        self.assertAlmostEqual(current - previous, interval + 0.05)
+
     def test_final_capture_prepares_layout_before_review(self):
         app = self.make_app()
         app.session.photos = [Path(f"photo_{i}.jpg") for i in range(3)]

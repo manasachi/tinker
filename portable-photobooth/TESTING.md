@@ -4,10 +4,11 @@ Work through these phases in order. Record pass/fail, the selected settings, and
 any error messages. Do not mark a hardware phase passed based only on unit tests.
 See [README](./README.md) for setup and the latest target design.
 
-**Current implementation:** one `photobooth.py` program, Start button, and the
-selected 5/10-second delay before every shot, including the first.
-**Planned:** separate LCD/capture programs, Submit button, and a fixed 10-second
-positioning countdown before photo 1. Phase 7 covers that future behavior.
+**Current implementation:** one `photobooth.py` program, Start button, a fixed
+15-second positioning countdown before photo 1, and the selected 5/10-second
+delay only between subsequent photos.
+**Planned:** separate LCD/capture programs, Submit button, and camera preparation
+during the positioning countdown. Phase 7 covers that future behavior.
 
 ## Phase 1: Pi, LCD, and camera setup
 
@@ -60,6 +61,8 @@ must have Tkinter installed because the application imports it.
 - Print-sheet dimensions/DPI, matching left/right strips, photo order, white
   gaps, EXIF orientation, and unchanged original files for 3/4-photo layouts.
 - Incomplete/unreadable inputs and visible layout failure handling.
+- A simulated clock verifies the first capture waits 15 seconds for all four
+  settings combinations, followed by the selected inter-photo countdowns.
 
 The fake camera writes placeholder bytes, not real JPEGs. These tests do not
 verify image quality, countdown timing, touchscreen rendering, autofocus, or
@@ -81,6 +84,7 @@ python3 photobooth.py --fullscreen --output "$HOME/Pictures/photobooth-test"
 - [ ] Changing either choice updates the photo-count/countdown summary.
 - [ ] Select 3 photos and 5 seconds; tap Start once.
 - [ ] Choices disappear and the countdown remains responsive and readable.
+- [ ] A 15-second positioning countdown appears for either interval selection.
 - [ ] Three shots are taken automatically, with no extra taps.
 - [ ] A preparing-strips message appears while the print layout is composed.
 - [ ] After the final save, the screen offers Review instead of opening photos
@@ -110,7 +114,8 @@ For each session:
 1. Use a stopwatch or phone video to check the displayed countdown. Each step
    should last approximately one second; investigate consistently skipped,
    stalled, or noticeably inaccurate steps.
-2. For the **current code**, verify the chosen delay runs before photo 1 too.
+2. Verify a fixed 15-second positioning countdown runs before photo 1, with no
+   additional selected 5/10-second delay. Subsequent photos use the selected delay.
    On the first capture after launch, camera setup adds about two seconds plus
    configuration overhead. Later countdowns start after the previous save
    completes, not at the previous shutter instant.
@@ -184,7 +189,7 @@ The unit tests cover partial-session bookkeeping; hardware recovery after a
 mid-session failure still needs separate verification. Never unplug a running
 camera to simulate it.
 
-## Phase 7: Separate programs and positioning timer (future)
+## Phase 7: Separate programs and camera preparation (future)
 
 **Blocked until implemented.** The planned `lcd_ui.py` and `capture.py` do not
 exist yet. Do not use the current Start behavior as evidence that this phase
@@ -193,7 +198,7 @@ passes.
 After implementation, repeat Phases 3, 4, and 6 with these additional checks:
 
 - [ ] Launch the LCD once. Submit starts a capture session, not a second window.
-- [ ] Both 5-second and 10-second selections start with the same 10-second
+- [ ] Both 5-second and 10-second selections preserve the same 15-second
       positioning countdown.
 - [ ] Photo 1 follows that countdown once the camera is ready, with no extra
       selected 5/10-second delay. A preparation message appears if needed.

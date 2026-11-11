@@ -13,7 +13,7 @@ not another copy of the interface.
    photos**.
 2. The user taps **Submit** once. Lock the choices and disable Submit so another
    session cannot start while one is running.
-3. Show **Get ready!** with a **10-second positioning countdown**, regardless of
+3. Show **Get ready!** with a **15-second positioning countdown**, regardless of
    the selected interval. Prepare the camera during this stage; if it is not
    ready, show a preparation message rather than silently taking a failed shot.
 4. Take and save photo 1 when the positioning countdown and camera preparation
@@ -32,7 +32,7 @@ not another copy of the interface.
 Example: with 3 photos and a 5-second interval, the sequence is:
 
 ```text
-Submit -> 10-second positioning countdown -> capture/save photo 1
+Submit -> 15-second positioning countdown -> capture/save photo 1
        -> 5-second countdown -> capture/save photo 2
        -> 5-second countdown -> capture/save photo 3
        -> Review button -> view photos -> Print (disabled)
@@ -54,7 +54,7 @@ The proposed split is:
 | Program | Responsibility |
 | --- | --- |
 | `lcd_ui.py` (planned) | Own the Tkinter window, choices, Submit callback, countdown display, Review, photo display, and disabled Print option. |
-| `capture.py` (planned) | Own Picamera2, camera preparation, the initial 10-second wait, the selected inter-photo waits, JPEG saving, and session results. No Tkinter window. |
+| `capture.py` (planned) | Own Picamera2, camera preparation, the initial 15-second wait, the selected inter-photo waits, JPEG saving, and session results. No Tkinter window. |
 
 Use Python's `subprocess.Popen` from the Submit callback to launch `capture.py`
 with validated photo-count and interval arguments, plus a unique output folder.
@@ -74,18 +74,19 @@ the screen. Drain standard error too, detect unexpected exits, and clean up the
 capture process and camera when the LCD app closes. The capture program owns
 timing; the LCD only displays its countdown messages so two timers cannot drift.
 
-**This split and the fixed 10-second positioning stage are the next implementation
-step, not features of the current code.** The planned filenames above do not
-exist yet. The current program is described below.
+**The program split and preparing the camera during the positioning stage are
+planned, not implemented.** The fixed 15-second countdown already works in the
+current single program; camera setup still happens at the first capture.
+The planned filenames above do not exist yet.
 
 ## What works in the current code
 
 - A cream-and-green options screen with large photo/timer choices, a live
   selection summary, and a Start photo session button. The palette uses
   `#386641`, `#6a994e`, `#a7c957`, `#f2e8cf`, and `#bc4749`.
-- Choose 3 or 4 photos and a 5 or 10 second countdown.
-- Press Start once. The app counts down before the first shot and before every
-  subsequent shot, with no additional button presses.
+- Choose 3 or 4 photos and a 5 or 10 second delay between photos.
+- Press Start once. A fixed 15-second positioning countdown runs before photo 1.
+  Only subsequent photos use the chosen 5/10-second delay, with no extra taps.
 - After the final capture, automatically save `print_layout.png` containing two
   identical vertical strips side by side. Both 3-photo and 4-photo layouts use
   the same sheet size.
@@ -96,8 +97,8 @@ exist yet. The current program is described below.
 
 Currently, both the LCD interface and capture logic live in `photobooth.py`.
 The Start button calls `PhotoBooth.start()`, which creates the session and begins
-the countdown. It uses the chosen 5/10 seconds before the first shot too, rather
-than the fixed 10-second positioning stage in the target design.
+the fixed 15-second positioning countdown. The selected interval applies only
+between photos, not before photo 1.
 
 There is no physical GPIO button support, live camera preview, or retake button
 in this first version. Use the LCD touchscreen or a mouse.
@@ -167,7 +168,7 @@ force physical print dimensions. Print remains disabled: no jobs are submitted.
 
 For step-by-step hardware and software checks, follow the
 [phased testing guide](./TESTING.md). It separates current functionality from
-future split-program, positioning-timer, and printer tests.
+future split-program and printer tests.
 
 ```sh
 python3 -m unittest -v
@@ -184,8 +185,8 @@ countdown timing, and Picamera2 capture still need testing on the Pi.
 Inspired by overtinker's portable photobooth, with different controls and flow.
 
 1. Set up Raspberry Pi 5 access and test the camera and LCD independently.
-2. Split the LCD and capture programs as described above, adding the fixed
-   10-second positioning countdown and Submit-triggered sessions.
+2. Split the LCD and capture programs as described above, preserving the fixed
+   15-second positioning countdown and preparing the camera during that wait.
 3. Test the complete 3/4-photo flow, countdowns, saved files, Review, and recovery
    from camera errors on the Pi.
 4. Confirm the printer model and paper dimensions, test the composed strip

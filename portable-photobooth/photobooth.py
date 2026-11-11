@@ -16,6 +16,7 @@ LEAF = "#6a994e"
 LIME = "#a7c957"
 CREAM = "#f2e8cf"
 RED = "#bc4749"
+POSITIONING_SECONDS = 15
 
 
 class Camera(Protocol):
@@ -158,7 +159,7 @@ class PhotoBooth:
         cards.columnconfigure((0, 1), weight=1, uniform="options")
         for column, (title, hint, variable, choices, suffix) in enumerate((
             ("01  THE STRIP", "How many photos?", self.count, (3, 4), "photos"),
-            ("02  THE PACE", "Countdown before each shot", self.interval, (5, 10), "sec"),
+            ("02  THE PACE", "Seconds between photos", self.interval, (5, 10), "sec"),
         )):
             card = tk.Frame(
                 cards, bg=CREAM, padx=12, pady=12,
@@ -194,13 +195,13 @@ class PhotoBooth:
         ).pack(pady=(16, 8))
         self.button("Start photo session", self.start, width=23)
         tk.Label(
-            self.frame, text="One tap to start. Review your photos when you're done.",
+            self.frame, text=f"You'll have {POSITIONING_SECONDS} seconds to get situated.",
             font=("Arial", 11), bg=CREAM, fg=FOREST,
         ).pack(pady=(6, 0))
 
     def update_summary(self, *_args) -> None:
         self.summary.set(
-            f"{self.count.get()} photos  /  {self.interval.get()}-second countdown"
+            f"{self.count.get()} photos  /  {self.interval.get()} seconds between shots"
         )
 
     def start(self) -> None:
@@ -209,16 +210,20 @@ class PhotoBooth:
         self.clear()
         self.status = self.label("Get ready!", 30)
         self.countdown = self.label("", 60)
-        self.tick(self.session.interval)
+        self.tick(POSITIONING_SECONDS)
 
     def tick(self, remaining: int) -> None:
         if self.closed:
             return
         self.status.config(
-            text=f"Photo {len(self.session.photos) + 1} of {self.session.photo_count}"
+            text=(
+                f"Get situated! Photo 1 of {self.session.photo_count}"
+                if not self.session.photos
+                else f"Photo {len(self.session.photos) + 1} of {self.session.photo_count}"
+            )
         )
         if remaining:
-            self.countdown.config(text=str(remaining))
+            self.countdown.config(text=str(remaining), font=("Arial", 60))
             self.root.after(1000, self.tick, remaining - 1)
         else:
             self.countdown.config(text="Smile!", font=("Arial", 40))
