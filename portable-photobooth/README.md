@@ -80,6 +80,9 @@ exist yet. The current program is described below.
 
 ## What works in the current code
 
+- A cream-and-green options screen with large photo/timer choices, a live
+  selection summary, and a Start photo session button. The palette uses
+  `#386641`, `#6a994e`, `#a7c957`, `#f2e8cf`, and `#bc4749`.
 - Choose 3 or 4 photos and a 5 or 10 second countdown.
 - Press Start once. The app counts down before the first shot and before every
   subsequent shot, with no additional button presses.

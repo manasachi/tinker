@@ -11,6 +11,13 @@ from typing import Protocol
 from uuid import uuid4
 
 
+FOREST = "#386641"
+LEAF = "#6a994e"
+LIME = "#a7c957"
+CREAM = "#f2e8cf"
+RED = "#bc4749"
+
+
 class Camera(Protocol):
     def capture_file(self, path: str) -> None: ...
 
@@ -105,10 +112,11 @@ class PhotoBooth:
         self.image = None
         root.title("Portable Photobooth")
         root.geometry("800x480")
+        root.configure(bg=CREAM)
         root.attributes("-fullscreen", fullscreen)
         root.bind("<Escape>", lambda event: root.attributes("-fullscreen", False))
         root.protocol("WM_DELETE_WINDOW", self.close)
-        self.frame = tk.Frame(root, padx=16, pady=12)
+        self.frame = tk.Frame(root, padx=16, pady=12, bg=CREAM)
         self.frame.pack(fill="both", expand=True)
         self.show_options()
 
@@ -118,36 +126,86 @@ class PhotoBooth:
         self.image = None
 
     def label(self, text: str, size: int = 22) -> tk.Label:
-        label = tk.Label(self.frame, text=text, font=("Arial", size))
+        label = tk.Label(
+            self.frame, text=text, font=("Arial", size), bg=CREAM, fg=FOREST
+        )
         label.pack(pady=8)
         return label
 
     def button(self, text: str, command, **options) -> tk.Button:
         button = tk.Button(
             self.frame, text=text, command=command, font=("Arial", 18),
-            padx=14, pady=8, **options
+            padx=14, pady=8, bg=FOREST, fg=CREAM,
+            activebackground=LEAF, activeforeground=CREAM, **options
         )
         button.pack(pady=6)
         return button
 
     def show_options(self) -> None:
         self.clear()
-        self.label("Portable Photobooth", 28)
+        tk.Label(
+            self.frame, text="MAKE A LITTLE MEMORY", font=("Arial", 10, "bold"),
+            bg=CREAM, fg=RED,
+        ).pack(pady=(4, 2))
+        tk.Label(
+            self.frame, text="Your moment, your photo strip.",
+            font=("Arial", 25, "bold"), bg=CREAM, fg=FOREST,
+        ).pack()
+        tk.Label(
+            self.frame, text="Pick your photos and pace. We'll handle the rest.",
+            font=("Arial", 12), bg=CREAM, fg=FOREST,
+        ).pack(pady=(4, 16))
         self.count = tk.IntVar(value=4)
         self.interval = tk.IntVar(value=5)
-        for title, variable, choices in (
-            ("Number of photos", self.count, (3, 4)),
-            ("Seconds before each photo", self.interval, (5, 10)),
-        ):
-            self.label(title, 18)
-            row = tk.Frame(self.frame)
-            row.pack()
+        cards = tk.Frame(self.frame, bg=CREAM)
+        cards.pack(fill="x", padx=12)
+        cards.columnconfigure((0, 1), weight=1, uniform="options")
+        for column, (title, hint, variable, choices, suffix) in enumerate((
+            ("01  THE STRIP", "How many photos?", self.count, (3, 4), "photos"),
+            ("02  THE PACE", "Countdown before each shot", self.interval, (5, 10), "sec"),
+        )):
+            card = tk.Frame(
+                cards, bg=CREAM, padx=12, pady=12,
+                highlightbackground=LEAF, highlightthickness=2,
+            )
+            card.grid(row=0, column=column, sticky="nsew", padx=6)
+            tk.Label(
+                card, text=title, font=("Arial", 11, "bold"), bg=CREAM, fg=FOREST,
+            ).pack(anchor="w")
+            tk.Label(
+                card, text=hint, font=("Arial", 11), bg=CREAM, fg=FOREST,
+            ).pack(anchor="w", pady=(4, 10))
+            row = tk.Frame(card, bg=CREAM)
+            row.pack(fill="x")
             for value in choices:
-                tk.Radiobutton(
-                    row, text=str(value), variable=variable, value=value,
-                    indicatoron=False, font=("Arial", 20), width=7, pady=8
-                ).pack(side="left", padx=8)
-        self.button("Start", self.start)
+                choice = tk.Radiobutton(
+                    row, text=f"{value} {suffix}", variable=variable, value=value,
+                    indicatoron=False, font=("Arial", 17, "bold"),
+                    bg=CREAM, fg=FOREST, selectcolor=LIME,
+                    activebackground=LIME, activeforeground=FOREST,
+                    relief="sunken", offrelief="flat", borderwidth=2,
+                    highlightbackground=LEAF, highlightcolor=FOREST,
+                    highlightthickness=2, padx=8, pady=12,
+                )
+                choice.pack(side="left", fill="x", expand=True, padx=3)
+        self.summary = tk.StringVar()
+        for variable in (self.count, self.interval):
+            variable.trace_add("write", self.update_summary)
+        self.update_summary()
+        tk.Label(
+            self.frame, textvariable=self.summary, font=("Arial", 12, "bold"),
+            bg=CREAM, fg=FOREST,
+        ).pack(pady=(16, 8))
+        self.button("Start photo session", self.start, width=23)
+        tk.Label(
+            self.frame, text="One tap to start. Review your photos when you're done.",
+            font=("Arial", 11), bg=CREAM, fg=FOREST,
+        ).pack(pady=(6, 0))
+
+    def update_summary(self, *_args) -> None:
+        self.summary.set(
+            f"{self.count.get()} photos  /  {self.interval.get()}-second countdown"
+        )
 
     def start(self) -> None:
         name = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:8]
