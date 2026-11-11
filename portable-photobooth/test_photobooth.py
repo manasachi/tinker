@@ -2,11 +2,13 @@ from pathlib import Path
 import tempfile
 import unittest
 from concurrent.futures import Future
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
+import sys
 
 from PIL import Image, ImageChops
 
-from photobooth import PhotoBooth, Session
+from photobooth import PhotoBooth, PiCamera, Session
 
 
 class FakeCamera:
@@ -130,23 +132,34 @@ class LayoutFlowTests(unittest.TestCase):
     def make_app(self):
         app = PhotoBooth.__new__(PhotoBooth)
         app.closed = False
-        for name in ("root", "worker", "session", "status", "countdown",
+        app.active = True
+        app.previewing = True
+        app.preview_ready = True
+        for name in ("root", "worker", "camera", "session", "status", "countdown",
                      "clear", "label", "button"):
             setattr(app, name, Mock())
+        app.session.photos = []
+        app.session.photo_count = 3
+        app.session.interval = 5
         return app
 
     def test_start_uses_fixed_positioning_countdown_for_either_interval(self):
         for interval in (5, 10):
             with self.subTest(interval=interval):
                 app = self.make_app()
+                app.active = False
                 app.output = Path("unused")
                 app.count = Mock()
                 app.count.get.return_value = 3
                 app.interval = Mock()
                 app.interval.get.return_value = interval
                 app.tick = Mock()
-                app.start()
-                app.tick.assert_called_once_with(15)
+                app.request_preview = Mock()
+                app.frame = Mock()
+                with patch("photobooth.tk.Frame"), patch("photobooth.tk.Label"):
+                    app.start()
+                app.tick.assert_called_once_with(15, app.session)
+                app.request_preview.assert_called_once_with(app.session)
                 self.assertEqual(app.session.interval, interval)
 
     def test_first_capture_waits_fifteen_seconds_then_uses_selected_interval(self):
@@ -178,9 +191,10 @@ class LayoutFlowTests(unittest.TestCase):
                     app.session.capture_next.side_effect = capture
                     app.worker.submit.side_effect = submit
                     app.root.after.side_effect = schedule
-                    app.tick(15)
+                    app.tick(15, app.session)
                     app.worker.submit.assert_not_called()
                     while events:
+                        events.sort(key=lambda event: event[0])
                         now, callback, args = events.pop(0)
                         callback(*args)
                     self.assertEqual(len(capture_times), count)
@@ -194,19 +208,20 @@ class LayoutFlowTests(unittest.TestCase):
         app.session.photo_count = 3
         future = Future()
         future.set_result(app.session.photos[-1])
-        app.check_capture(future)
+        app.check_capture(future, app.session)
         app.worker.submit.assert_called_once_with(app.session.prepare_print_layout)
         app.button.assert_not_called()
         app.root.after.assert_called_once_with(
-            50, app.check_layout, app.worker.submit.return_value
+            50, app.check_layout, app.worker.submit.return_value, app.session
         )
+        self.assertFalse(app.previewing)
 
     def test_layout_failure_is_visible_and_originals_remain_reviewable(self):
         app = self.make_app()
         future = Future()
         future.set_exception(OSError("Disk full"))
         with patch("photobooth.messagebox.showerror") as showerror:
-            app.check_layout(future)
+            app.check_layout(future, app.session)
         showerror.assert_called_once()
         self.assertIn("Disk full", showerror.call_args.args[1])
         self.assertEqual(app.button.call_args.args[0], "Review")
@@ -216,9 +231,120 @@ class LayoutFlowTests(unittest.TestCase):
         future = Future()
         future.set_result(Path("print_layout.png"))
         with patch("photobooth.messagebox.showerror") as showerror:
-            app.check_layout(future)
+            app.check_layout(future, app.session)
         showerror.assert_not_called()
         self.assertEqual(app.button.call_args.args[0], "Review")
+
+    def test_preview_renders_and_schedules_only_one_next_frame(self):
+        app = self.make_app()
+        app.preview_frame = Mock()
+        app.preview_frame.winfo_width.return_value = 800
+        app.preview_frame.winfo_height.return_value = 360
+        app.preview_label = Mock()
+        future = Future()
+        future.set_result(Image.new("RGB", (640, 360), "green"))
+        with patch("PIL.ImageTk.PhotoImage") as image:
+            app.check_preview(future, app.session)
+        app.preview_label.config.assert_called_once_with(image=image.return_value, text="")
+        self.assertTrue(app.preview_ready)
+        app.root.after.assert_called_once_with(150, app.request_preview, app.session)
+
+    def test_unfinished_preview_polls_without_submitting_more_frames(self):
+        app = self.make_app()
+        future = Future()
+        app.check_preview(future, app.session)
+        app.worker.submit.assert_not_called()
+        app.root.after.assert_called_once_with(50, app.check_preview, future, app.session)
+
+    def test_preview_failure_stops_countdown_and_reports_error(self):
+        app = self.make_app()
+        app.show_options = Mock()
+        future = Future()
+        future.set_exception(OSError("Camera disconnected"))
+        with patch("photobooth.messagebox.showerror") as showerror:
+            app.check_preview(future, app.session)
+        self.assertIn("Camera disconnected", showerror.call_args.args[1])
+        self.assertFalse(app.active)
+        self.assertFalse(app.previewing)
+        app.show_options.assert_called_once()
+        app.tick(0, app.session)
+        app.worker.submit.assert_not_called()
+
+    def test_capture_waits_if_camera_is_not_ready_at_end_of_countdown(self):
+        app = self.make_app()
+        app.preview_ready = False
+        app.tick(0, app.session)
+        app.worker.submit.assert_not_called()
+        app.root.after.assert_called_once_with(50, app.tick, 0, app.session)
+        app.preview_ready = True
+        app.tick(0, app.session)
+        app.worker.submit.assert_called_once()
+
+    def test_old_session_and_shutdown_callbacks_do_not_change_ui(self):
+        for stale_session, closed, previewing in (
+            (True, False, True), (False, True, True), (False, False, False)
+        ):
+            with self.subTest(stale=stale_session, closed=closed, previewing=previewing):
+                app = self.make_app()
+                session = app.session
+                if stale_session:
+                    app.session = Mock()
+                app.closed = closed
+                app.previewing = previewing
+                app.request_preview(session)
+                app.check_preview(Future(), session)
+                app.root.after.assert_not_called()
+                app.worker.submit.assert_not_called()
+
+    def test_start_ignores_duplicate_click_while_active(self):
+        app = self.make_app()
+        app.start()
+        app.clear.assert_not_called()
+
+
+class PiCameraTests(unittest.TestCase):
+    def test_preview_and_capture_share_one_camera_and_enable_autofocus(self):
+        hardware = Mock()
+        hardware.camera_controls = {"AfMode": ()}
+        hardware.capture_image.return_value = Image.new("RGB", (2304, 1296), "red")
+        picamera2 = SimpleNamespace(Picamera2=Mock(return_value=hardware))
+        libcamera = SimpleNamespace(
+            controls=SimpleNamespace(AfModeEnum=SimpleNamespace(Continuous=2))
+        )
+        with patch.dict(sys.modules, picamera2=picamera2, libcamera=libcamera), \
+                patch("time.sleep"):
+            camera = PiCamera()
+            preview = camera.preview_image()
+            camera.capture_file("photo.jpg")
+            self.assertEqual(preview.size, (640, 360))
+            self.assertEqual(preview.getpixel((0, 0)), (255, 0, 0))
+            picamera2.Picamera2.assert_called_once()
+            hardware.create_still_configuration.assert_called_once_with(
+                main={"size": (2304, 1296), "format": "RGB888"}, buffer_count=2
+            )
+            hardware.set_controls.assert_called_once_with({"AfMode": 2})
+            hardware.capture_image.assert_called_once_with("main")
+            hardware.capture_file.assert_called_once_with("photo.jpg")
+            camera.close()
+            hardware.close.assert_called_once()
+
+    def test_failed_camera_setup_closes_device_and_allows_retry(self):
+        hardware = Mock()
+        hardware.camera_controls = {}
+        hardware.start.side_effect = [OSError("Camera busy"), None]
+        picamera2 = SimpleNamespace(Picamera2=Mock(return_value=hardware))
+        libcamera = SimpleNamespace(controls=Mock())
+        with patch.dict(sys.modules, picamera2=picamera2, libcamera=libcamera), \
+                patch("time.sleep"):
+            camera = PiCamera()
+            with self.assertRaisesRegex(OSError, "Camera busy"):
+                camera.prepare()
+            self.assertIsNone(camera.camera)
+            hardware.close.assert_called_once()
+            camera.prepare()
+            self.assertIs(camera.camera, hardware)
+            hardware.set_controls.assert_not_called()
+            camera.close()
 
 
 if __name__ == "__main__":

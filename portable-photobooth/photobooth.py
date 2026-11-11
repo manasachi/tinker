@@ -77,22 +77,37 @@ class PiCamera:
     def __init__(self) -> None:
         self.camera = None
 
-    def capture_file(self, path: str) -> None:
+    def prepare(self) -> None:
         if self.camera is None:
             from picamera2 import Picamera2
+            from libcamera import controls
             from time import sleep
 
             camera = Picamera2()
             try:
                 camera.configure(
-                    camera.create_still_configuration(main={"size": (2304, 1296)})
+                    camera.create_still_configuration(
+                        main={"size": (2304, 1296), "format": "RGB888"},
+                        buffer_count=2,
+                    )
                 )
+                if "AfMode" in camera.camera_controls:
+                    camera.set_controls({"AfMode": controls.AfModeEnum.Continuous})
                 camera.start()
                 sleep(2)  # Allow automatic exposure and white balance to settle.
             except Exception:
                 camera.close()
                 raise
             self.camera = camera
+
+    def preview_image(self):
+        self.prepare()
+        image = self.camera.capture_image("main")
+        image.thumbnail((640, 360))
+        return image
+
+    def capture_file(self, path: str) -> None:
+        self.prepare()
         self.camera.capture_file(path)
 
     def close(self) -> None:
@@ -109,6 +124,9 @@ class PhotoBooth:
         self.worker = ThreadPoolExecutor(max_workers=1)
         self.session = None
         self.closed = False
+        self.active = False
+        self.previewing = False
+        self.preview_ready = False
         self.review_index = 0
         self.image = None
         root.title("Portable Photobooth")
@@ -143,6 +161,8 @@ class PhotoBooth:
         return button
 
     def show_options(self) -> None:
+        self.active = False
+        self.previewing = False
         self.clear()
         tk.Label(
             self.frame, text="MAKE A LITTLE MEMORY", font=("Arial", 10, "bold"),
@@ -205,60 +225,126 @@ class PhotoBooth:
         )
 
     def start(self) -> None:
+        if self.closed or self.active:
+            return
         name = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:8]
         self.session = Session(self.count.get(), self.interval.get(), self.output / name)
+        self.active = True
+        self.previewing = True
+        self.preview_ready = False
         self.clear()
-        self.status = self.label("Get ready!", 30)
-        self.countdown = self.label("", 60)
-        self.tick(POSITIONING_SECONDS)
+        header = tk.Frame(self.frame, bg=CREAM)
+        header.pack(fill="x", pady=(0, 8))
+        self.status = tk.Label(
+            header, text="Get ready!", font=("Arial", 20, "bold"), bg=CREAM, fg=FOREST
+        )
+        self.status.pack(side="left", padx=8)
+        self.countdown = tk.Label(
+            header, text="", font=("Arial", 36, "bold"), bg=CREAM, fg=RED
+        )
+        self.countdown.pack(side="right", padx=8)
+        self.preview_frame = tk.Frame(self.frame, bg=FOREST)
+        self.preview_frame.pack(fill="both", expand=True)
+        self.preview_label = tk.Label(
+            self.preview_frame, text="Starting camera...", bg=FOREST, fg=CREAM,
+            font=("Arial", 18), borderwidth=0,
+        )
+        self.preview_label.place(relx=0.5, rely=0.5, anchor="center")
+        self.request_preview(self.session)
+        self.tick(POSITIONING_SECONDS, self.session)
 
-    def tick(self, remaining: int) -> None:
-        if self.closed:
+    def is_active(self, session: Session) -> bool:
+        return not self.closed and self.active and session is self.session
+
+    def request_preview(self, session: Session) -> None:
+        if not self.is_active(session) or not self.previewing:
+            return
+        future = self.worker.submit(self.camera.preview_image)
+        self.root.after(50, self.check_preview, future, session)
+
+    def check_preview(self, future, session: Session) -> None:
+        if not self.is_active(session) or not self.previewing:
+            return
+        if not future.done():
+            self.root.after(50, self.check_preview, future, session)
+            return
+        try:
+            from PIL import ImageTk
+
+            frame = future.result()
+            frame.thumbnail((
+                max(1, self.preview_frame.winfo_width() - 8),
+                max(1, self.preview_frame.winfo_height() - 8),
+            ))
+            self.image = ImageTk.PhotoImage(frame)
+            self.preview_label.config(image=self.image, text="")
+        except Exception as error:
+            self.active = False
+            self.previewing = False
+            messagebox.showerror(
+                "Camera preview failed",
+                f"Could not show the camera preview:\n{error}\n\n"
+                f"Any completed photos remain in:\n{session.directory}",
+            )
+            self.show_options()
+            return
+        self.preview_ready = True
+        self.root.after(150, self.request_preview, session)
+
+    def tick(self, remaining: int, session: Session) -> None:
+        if not self.is_active(session):
             return
         self.status.config(
             text=(
-                f"Get situated! Photo 1 of {self.session.photo_count}"
-                if not self.session.photos
-                else f"Photo {len(self.session.photos) + 1} of {self.session.photo_count}"
+                f"Get situated! Photo 1 of {session.photo_count}"
+                if not session.photos
+                else f"Photo {len(session.photos) + 1} of {session.photo_count}"
             )
         )
         if remaining:
-            self.countdown.config(text=str(remaining), font=("Arial", 60))
-            self.root.after(1000, self.tick, remaining - 1)
+            self.countdown.config(text=str(remaining))
+            self.root.after(1000, self.tick, remaining - 1, session)
+        elif not self.preview_ready:
+            self.status.config(text="Waiting for camera...")
+            self.countdown.config(text="")
+            self.root.after(50, self.tick, 0, session)
         else:
-            self.countdown.config(text="Smile!", font=("Arial", 40))
-            future = self.worker.submit(self.session.capture_next, self.camera)
-            self.root.after(50, self.check_capture, future)
+            self.countdown.config(text="Smile!")
+            future = self.worker.submit(session.capture_next, self.camera)
+            self.root.after(50, self.check_capture, future, session)
 
-    def check_capture(self, future) -> None:
-        if self.closed:
+    def check_capture(self, future, session: Session) -> None:
+        if not self.is_active(session):
             return
         if not future.done():
-            self.root.after(50, self.check_capture, future)
+            self.root.after(50, self.check_capture, future, session)
             return
         try:
             future.result()
         except Exception as error:
+            self.active = False
+            self.previewing = False
             messagebox.showerror(
                 "Capture failed",
                 f"Could not capture the photo:\n{error}\n\n"
-                f"Any completed photos remain in:\n{self.session.directory}",
+                f"Any completed photos remain in:\n{session.directory}",
             )
             self.show_options()
             return
-        if len(self.session.photos) < self.session.photo_count:
-            self.tick(self.session.interval)
+        if len(session.photos) < session.photo_count:
+            self.tick(session.interval, session)
         else:
+            self.previewing = False
             self.status.config(text="Preparing your photo strips...")
             self.countdown.config(text="")
-            future = self.worker.submit(self.session.prepare_print_layout)
-            self.root.after(50, self.check_layout, future)
+            future = self.worker.submit(session.prepare_print_layout)
+            self.root.after(50, self.check_layout, future, session)
 
-    def check_layout(self, future) -> None:
-        if self.closed:
+    def check_layout(self, future, session: Session) -> None:
+        if not self.is_active(session):
             return
         if not future.done():
-            self.root.after(50, self.check_layout, future)
+            self.root.after(50, self.check_layout, future, session)
             return
         try:
             future.result()
@@ -266,8 +352,9 @@ class PhotoBooth:
             messagebox.showerror(
                 "Print layout failed",
                 f"Could not prepare the photo strips:\n{error}\n\n"
-                f"Your original photos remain in:\n{self.session.directory}",
+                f"Your original photos remain in:\n{session.directory}",
             )
+        self.active = False
         self.clear()
         self.label("Your photos are ready!")
         self.button("Review", lambda: self.show_photo(0))
@@ -308,6 +395,8 @@ class PhotoBooth:
 
     def close(self) -> None:
         self.closed = True
+        self.active = False
+        self.previewing = False
         cleanup = self.worker.submit(self.camera.close)
         self.worker.shutdown(wait=False)
         self.root.destroy()

@@ -1,0 +1,160 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1400" viewBox="0 0 1800 1400" role="img" aria-labelledby="title description">
+  <title id="title">Photobooth enclosure and labeled Raspberry Pi 5 cable connections</title>
+  <desc id="description">Front view of a cardboard photobooth alongside an open-back connection map. A 15-pin camera connector connects to a Pi 5 CAM/DISP port using a 22-to-15-pin camera ribbon. Micro HDMI connects the Pi to an HDMI touchscreen, USB connects touch input, a USB-C supply powers the Pi, and a fan cable connects an Active Cooler to the FAN header. Separate LCD power is optional and model dependent. Port positions are simplified, not a physical wiring template.</desc>
+  <defs>
+    <linearGradient id="cardboard" x2="0.8" y2="1">
+      <stop stop-color="#dec497"/>
+      <stop offset="1" stop-color="#c5a16d"/>
+    </linearGradient>
+    <linearGradient id="screen" x2="0.8" y2="1">
+      <stop stop-color="#a7c957"/>
+      <stop offset="1" stop-color="#386641"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#386641" flood-opacity=".14"/>
+    </filter>
+    <style>
+      text { font-family: Arial, Helvetica, sans-serif; fill: #386641; }
+      .heading { font-size: 25px; font-weight: 700; }
+      .label { font-size: 21px; font-weight: 700; }
+      .small { font-size: 18px; }
+      .port { font-size: 17px; font-weight: 700; }
+      .cable { fill: none; stroke-width: 10; stroke-linecap: round; stroke-linejoin: round; }
+      .badge { font-size: 20px; font-weight: 700; text-anchor: middle; fill: #f2e8cf; }
+    </style>
+  </defs>
+  <rect width="1800" height="1400" rx="24" fill="#f2e8cf"/>
+  <text x="50" y="52" font-size="15" font-weight="700" letter-spacing="3" style="fill:#bc4749">REUSE A SHIPPING BOX</text>
+  <text x="50" y="101" font-size="40" font-weight="700">What goes in the box.</text>
+  <text x="50" y="137" class="small">Example LCD: HDMI video + USB touch. Verify your actual screen's connectors and power requirements before buying cables.</text>
+  <text x="55" y="199" class="heading">01 / Front: faces the people</text>
+  <text x="650" y="199" class="heading">02 / Open back: labeled connection map</text>
+
+  <ellipse cx="288" cy="690" rx="188" ry="25" fill="#386641" opacity=".10"/>
+  <g filter="url(#shadow)">
+    <path d="M108 310 169 269 471 269 410 310Z" fill="#e6d0ab" stroke="#ad895c" stroke-width="2"/>
+    <path d="M410 310 471 269 471 621 410 669Z" fill="#b28b58" stroke="#987442" stroke-width="2"/>
+    <rect x="108" y="310" width="302" height="359" rx="5" fill="url(#cardboard)" stroke="#ad895c" stroke-width="2"/>
+    <circle cx="259" cy="365" r="31" fill="#386641"/>
+    <circle cx="259" cy="365" r="23" fill="#182c25"/>
+    <circle cx="259" cy="365" r="14" fill="#547d79"/>
+    <circle cx="254" cy="360" r="6" fill="#f2e8cf" opacity=".7"/>
+    <rect x="135" y="424" width="248" height="172" rx="9" fill="#28392d"/>
+    <rect x="146" y="435" width="226" height="150" rx="3" fill="url(#screen)"/>
+    <text x="158" y="456" font-size="11" font-weight="700" style="fill:#f2e8cf">GET SITUATED!</text>
+    <rect x="327" y="443" width="33" height="25" rx="6" fill="#bc4749"/>
+    <text x="335" y="461" font-size="17" font-weight="700" style="fill:#f2e8cf">15</text>
+    <circle cx="218" cy="496" r="16" fill="#f2e8cf"/>
+    <path d="M190 554 Q190 518 218 518 Q246 518 246 554" fill="#f2e8cf"/>
+    <circle cx="286" cy="500" r="14" fill="#f2e8cf" opacity=".8"/>
+    <path d="M260 554 Q260 520 286 520 Q312 520 312 554" fill="#f2e8cf" opacity=".8"/>
+    <text x="191" y="630" font-size="13" letter-spacing="2">PHOTOBOOTH</text>
+  </g>
+  <text x="55" y="244" class="small">Camera lens just above the touchscreen.</text>
+  <text x="55" y="758" class="label">Live view + countdown on the LCD</text>
+  <text x="55" y="790" class="small">Mount lens close to the front surface.</text>
+  <text x="55" y="820" class="small">Reinforce the screen opening and base.</text>
+  <text x="55" y="880" class="label">Keep the printer outside for now.</text>
+  <text x="55" y="912" class="small">No printer or battery wiring is shown.</text>
+  <text x="55" y="942" class="small">Start with the normal external Pi supply.</text>
+
+  <rect x="650" y="225" width="1100" height="610" rx="14" fill="#d7bb8d" stroke="#ad895c" stroke-width="3"/>
+  <rect x="668" y="243" width="1064" height="574" rx="8" fill="#e8d5b5"/>
+  <text x="687" y="277" class="small">Mounting zones only; Pi port positions are simplified, not a physical board layout.</text>
+
+  <!-- Camera board and the two different ends of its ribbon. -->
+  <rect x="820" y="305" width="210" height="87" rx="7" fill="#386641" stroke="#6a994e" stroke-width="3"/>
+  <circle cx="834" cy="319" r="5" fill="#f2e8cf"/>
+  <circle cx="1016" cy="378" r="5" fill="#f2e8cf"/>
+  <text x="845" y="339" font-size="18" font-weight="700" style="fill:#f2e8cf">CAMERA MODULE 3</text>
+  <text x="866" y="365" font-size="17" style="fill:#f2e8cf">Wide / board rear</text>
+  <rect x="910" y="382" width="70" height="15" fill="#28392d"/>
+  <text x="690" y="418" class="port">15-pin camera end</text>
+  <path d="M875 411 930 396" stroke="#386641" stroke-width="2" fill="none"/>
+
+  <!-- Pi and individually labeled logical connection points. -->
+  <rect x="1160" y="480" width="490" height="280" rx="12" fill="#386641" stroke="#6a994e" stroke-width="4"/>
+  <text x="1324" y="516" font-size="25" font-weight="700" style="fill:#f2e8cf">RASPBERRY PI 5</text>
+  <circle cx="1176" cy="496" r="5" fill="#f2e8cf"/>
+  <circle cx="1634" cy="744" r="5" fill="#f2e8cf"/>
+  <rect x="1195" y="470" width="90" height="22" rx="2" fill="#182c25"/>
+  <text x="1194" y="400" class="port">CAM/DISP 0 or 1</text>
+  <text x="1310" y="436" class="small">22-pin Pi end</text>
+  <path d="M1330 442 1284 479" stroke="#386641" stroke-width="2" fill="none"/>
+  <rect x="1148" y="551" width="32" height="26" rx="3" fill="#b9b9ac"/>
+  <text x="1196" y="571" font-size="19" font-weight="700" style="fill:#f2e8cf">micro-HDMI 0</text>
+  <rect x="1148" y="652" width="32" height="30" rx="3" fill="#b9b9ac"/>
+  <text x="1196" y="674" font-size="19" font-weight="700" style="fill:#f2e8cf">USB-A</text>
+  <rect x="1345" y="745" width="80" height="25" rx="6" fill="#b9b9ac"/>
+  <text x="1332" y="731" font-size="18" font-weight="700" style="fill:#f2e8cf">USB-C POWER</text>
+  <rect x="1555" y="541" width="66" height="20" rx="2" fill="#182c25"/>
+  <text x="1565" y="534" font-size="16" font-weight="700" style="fill:#f2e8cf">FAN</text>
+  <rect x="1430" y="593" width="151" height="116" rx="7" fill="#b9b9ac"/>
+  <circle cx="1505" cy="645" r="39" fill="#28392d"/>
+  <path d="M1505 645q-35-46-33-4m33 4q46-35 4-33m-4 33q35 46 33 4m-33-4q-46 35-4 33" fill="#a7c957"/>
+  <text x="1443" y="699" font-size="16" font-weight="700">Active Cooler</text>
+
+  <!-- Display rear: separate video, touch, and optional power sockets. -->
+  <rect x="710" y="493" width="295" height="267" rx="10" fill="#6c796d" stroke="#386641" stroke-width="3"/>
+  <rect x="729" y="512" width="257" height="225" rx="6" fill="#8b968b"/>
+  <text x="755" y="543" font-size="22" font-weight="700" style="fill:#f2e8cf">TOUCHSCREEN REAR</text>
+  <text x="743" y="590" font-size="16" style="fill:#f2e8cf">HDMI IN</text>
+  <rect x="977" y="551" width="34" height="26" rx="3" fill="#28392d"/>
+  <text x="743" y="679" font-size="16" style="fill:#f2e8cf">USB TOUCH / DATA</text>
+  <rect x="977" y="652" width="34" height="30" rx="3" fill="#28392d"/>
+  <rect x="788" y="746" width="64" height="23" rx="4" fill="#28392d"/>
+  <text x="752" y="727" font-size="15" style="fill:#f2e8cf">POWER, IF REQUIRED</text>
+
+  <!-- All cable paths visibly terminate at their labeled connectors. -->
+  <path d="M945 397 C945 449 1240 397 1240 470" fill="none" stroke="#f2e8cf" stroke-width="24"/>
+  <path d="M945 397 C945 449 1240 397 1240 470" fill="none" stroke="#6a994e" stroke-width="4"/>
+  <circle cx="1090" cy="422" r="19" fill="#386641"/>
+  <text x="1090" y="429" class="badge" style="fill:#f2e8cf">A</text>
+  <path d="M1011 564 H1148" class="cable" stroke="#bc4749"/>
+  <circle cx="1080" cy="564" r="19" fill="#bc4749"/>
+  <text x="1080" y="571" class="badge" style="fill:#f2e8cf">B</text>
+  <text x="1021" y="606" class="port">VIDEO</text>
+  <path d="M1011 667 H1148" class="cable" stroke="#356d9e"/>
+  <circle cx="1080" cy="667" r="19" fill="#356d9e"/>
+  <text x="1080" y="674" class="badge" style="fill:#f2e8cf">C</text>
+  <text x="1020" y="712" class="port">TOUCH</text>
+  <path d="M1588 561 V577 Q1588 585 1560 585 H1505 V606" fill="none" stroke="#85579c" stroke-width="6"/>
+  <circle cx="1544" cy="584" r="16" fill="#85579c"/>
+  <text x="1544" y="591" class="badge" style="fill:#f2e8cf">E</text>
+  <path d="M1385 770 V854 Q1385 910 1470 910" class="cable" stroke="#386641"/>
+  <circle cx="1385" cy="821" r="19" fill="#386641"/>
+  <text x="1385" y="828" class="badge" style="fill:#f2e8cf">D</text>
+  <rect x="1470" y="879" width="250" height="65" rx="10" fill="#386641"/>
+  <text x="1493" y="907" font-size="19" font-weight="700" style="fill:#f2e8cf">PI 5 USB-C SUPPLY</text>
+  <text x="1504" y="932" font-size="16" style="fill:#f2e8cf">external / properly rated</text>
+  <path d="M820 769 V910 H925" fill="none" stroke="#aa7434" stroke-width="7" stroke-dasharray="10 8"/>
+  <rect x="925" y="879" width="340" height="65" rx="10" fill="#e8d5b5" stroke="#aa7434" stroke-width="2"/>
+  <text x="947" y="907" class="port">LCD SUPPLY, IF REQUIRED</text>
+  <text x="942" y="932" font-size="16">Follow the screen manufacturer's spec.</text>
+  <path d="M1702 565v22m0 15v22m0 15v22m0 15v22m0 15v22" stroke="#ad895c" stroke-width="8" stroke-linecap="round"/>
+  <text x="1668" y="769" font-size="16" font-weight="700" transform="rotate(-90 1668 769)">VENTS / AIR SPACE</text>
+
+  <rect x="45" y="1000" width="1710" height="285" rx="16" fill="#e6dcc2"/>
+  <text x="70" y="1040" class="heading">Cable checklist - match the letters above</text>
+  <text x="70" y="1085" class="label">A / Camera ribbon</text>
+  <text x="70" y="1115" class="small">Pi 5-compatible 22-pin to 15-pin camera cable.</text>
+  <text x="70" y="1143" class="small">Camera's 15-pin socket to Pi CAM/DISP socket.</text>
+  <text x="665" y="1085" class="label">B / Display video</text>
+  <text x="665" y="1115" class="small">micro-HDMI (Pi) to the LCD's HDMI input.</text>
+  <text x="665" y="1143" class="small">Match the screen end: full / mini / micro HDMI.</text>
+  <text x="1230" y="1085" class="label">C / Touch input</text>
+  <text x="1230" y="1115" class="small">USB-A (Pi) to LCD's USB touch/data port.</text>
+  <text x="1230" y="1143" class="small">Use a data cable, not a charge-only cable.</text>
+  <text x="70" y="1200" class="label">D / Pi power</text>
+  <text x="70" y="1230" class="small">Properly rated Pi 5 USB-C power supply.</text>
+  <text x="70" y="1258" class="small">Official 27 W supply is a simple starting point.</text>
+  <text x="665" y="1200" class="label">E / Fan cable</text>
+  <text x="665" y="1230" class="small">Active Cooler's lead to Pi 5's FAN header.</text>
+  <text x="665" y="1258" class="small">Not a USB cable and not a GPIO power hookup.</text>
+  <text x="1230" y="1200" class="label">Dashed / LCD power is model-specific</text>
+  <text x="1230" y="1230" class="small">Some screens get power through USB touch.</text>
+  <text x="1230" y="1258" class="small">Others need their own specified supply.</text>
+  <rect x="45" y="1310" width="1710" height="62" rx="12" fill="#386641"/>
+  <text x="68" y="1336" font-size="18" font-weight="700" style="fill:#f2e8cf">DSI DISPLAY? It uses a different connection plan - do not buy HDMI/USB cables based on this example.</text>
+  <text x="68" y="1360" font-size="17" style="fill:#f2e8cf">Power off and unplug before fitting ribbons. Match connector orientation to the hardware guides; never force a cable.</text>
+</svg>

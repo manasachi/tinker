@@ -7,8 +7,9 @@ See [README](./README.md) for setup and the latest target design.
 **Current implementation:** one `photobooth.py` program, Start button, a fixed
 15-second positioning countdown before photo 1, and the selected 5/10-second
 delay only between subsequent photos.
-**Planned:** separate LCD/capture programs, Submit button, and camera preparation
-during the positioning countdown. Phase 7 covers that future behavior.
+Live preview and background camera preparation run during positioning and between
+shots. **Planned:** separate LCD/capture programs and a Submit button. Phase 7
+covers that future split.
 
 ## Phase 1: Pi, LCD, and camera setup
 
@@ -63,6 +64,8 @@ must have Tkinter installed because the application imports it.
 - Incomplete/unreadable inputs and visible layout failure handling.
 - A simulated clock verifies the first capture waits 15 seconds for all four
   settings combinations, followed by the selected inter-photo countdowns.
+- Preview rendering/polling, camera startup failure, stale callbacks, camera
+  readiness, and shared preview/still camera setup with continuous autofocus.
 
 The fake camera writes placeholder bytes, not real JPEGs. These tests do not
 verify image quality, countdown timing, touchscreen rendering, autofocus, or
@@ -85,7 +88,13 @@ python3 photobooth.py --fullscreen --output "$HOME/Pictures/photobooth-test"
 - [ ] Select 3 photos and 5 seconds; tap Start once.
 - [ ] Choices disappear and the countdown remains responsive and readable.
 - [ ] A 15-second positioning countdown appears for either interval selection.
+- [ ] After camera startup, live images appear below the timer. Move your hand
+      and verify the image updates during positioning and between shots.
+- [ ] Preview has correct colors/orientation and is not stretched or mirrored.
+- [ ] A brief preview pause at the shutter is acceptable; no frozen UI or second
+      camera window appears.
 - [ ] Three shots are taken automatically, with no extra taps.
+- [ ] Live preview stops after the last shot and does not replace Review photos.
 - [ ] A preparing-strips message appears while the print layout is composed.
 - [ ] After the final save, the screen offers Review instead of opening photos
       automatically.
@@ -116,8 +125,9 @@ For each session:
    stalled, or noticeably inaccurate steps.
 2. Verify a fixed 15-second positioning countdown runs before photo 1, with no
    additional selected 5/10-second delay. Subsequent photos use the selected delay.
-   On the first capture after launch, camera setup adds about two seconds plus
-   configuration overhead. Later countdowns start after the previous save
+   Camera setup and exposure settling run during the initial countdown. If not
+   ready at zero, expect "Waiting for camera..." and no premature capture.
+   Later countdowns start after the previous save
    completes, not at the previous shutter instant.
 3. Check the new session folder under `~/Pictures/photobooth-test`.
    Expect `photo_01.jpg` through `photo_03.jpg` or `photo_04.jpg`, plus one
@@ -149,16 +159,19 @@ Test in the lighting and at the distances expected at an event:
 Use soft visible lighting in front of people. The regular Camera Module 3 Wide
 is the intended color-photo camera, not NoIR.
 
-**Pass:** saved images meet your visual quality expectations. The current app has
-no live preview, zoom choice, person detection, or explicit continuous-autofocus
-configuration; do not mark those features tested or supported.
+**Pass:** saved images meet your visual quality expectations. Continuous autofocus
+is enabled on cameras exposing `AfMode`, including Camera Module 3. Check that
+focus adjusts when people change distance; hardware focus quality is not proven
+by the mocked tests. There is no zoom choice, person detection, or print-crop
+guide. The unmirrored live view shows full capture framing, not the tighter print
+crop.
 
 ## Phase 6: Errors, shutdown, and repeated use
 
 Use test photos and a separate test output folder.
 
 1. **Camera unavailable:** close the app, shut down the Pi, disconnect the camera,
-   and boot again. Start a session. Expect a visible capture error, no success or
+   and boot again. Start a session. Expect a visible camera preview error, no success or
    Review screen for that failed session, and a return to the choices.
    Shut down before reconnecting the camera.
 2. **Save failure:** on Raspberry Pi OS, launch as your normal user with an
@@ -189,7 +202,7 @@ The unit tests cover partial-session bookkeeping; hardware recovery after a
 mid-session failure still needs separate verification. Never unplug a running
 camera to simulate it.
 
-## Phase 7: Separate programs and camera preparation (future)
+## Phase 7: Separate programs (future)
 
 **Blocked until implemented.** The planned `lcd_ui.py` and `capture.py` do not
 exist yet. Do not use the current Start behavior as evidence that this phase

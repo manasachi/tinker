@@ -74,10 +74,9 @@ the screen. Drain standard error too, detect unexpected exits, and clean up the
 capture process and camera when the LCD app closes. The capture program owns
 timing; the LCD only displays its countdown messages so two timers cannot drift.
 
-**The program split and preparing the camera during the positioning stage are
-planned, not implemented.** The fixed 15-second countdown already works in the
-current single program; camera setup still happens at the first capture.
-The planned filenames above do not exist yet.
+**The program split is planned, not implemented.** The fixed 15-second countdown,
+camera preparation during that wait, and live view already work in the current
+single program. The planned filenames above do not exist yet.
 
 ## What works in the current code
 
@@ -87,6 +86,8 @@ The planned filenames above do not exist yet.
 - Choose 3 or 4 photos and a 5 or 10 second delay between photos.
 - Press Start once. A fixed 15-second positioning countdown runs before photo 1.
   Only subsequent photos use the chosen 5/10-second delay, with no extra taps.
+- The LCD shows a live camera view during positioning and between photos, with
+  the countdown above it. Camera Module 3 continuous autofocus is enabled.
 - After the final capture, automatically save `print_layout.png` containing two
   identical vertical strips side by side. Both 3-photo and 4-photo layouts use
   the same sheet size.
@@ -100,8 +101,101 @@ The Start button calls `PhotoBooth.start()`, which creates the session and begin
 the fixed 15-second positioning countdown. The selected interval applies only
 between photos, not before photo 1.
 
-There is no physical GPIO button support, live camera preview, or retake button
+There is no physical GPIO button support or retake button
 in this first version. Use the LCD touchscreen or a mouse.
+
+### What appears on the LCD?
+
+**The LCD shows a live camera preview after Start**, during the 15-second
+positioning countdown and between photos. The countdown stays above the image.
+The camera starts on the background worker while the timer runs. If it is not
+ready at zero, the screen says "Waiting for camera..." before taking photo 1.
+The preview may pause briefly during a still capture; it stops after the final
+shot. Review then shows the saved photos, not a live feed.
+
+```text
+CURRENT SCREEN FLOW
+Options -> live view + 15-second countdown -> capture
+        -> live view + 5/10-second countdown -> capture -> ...
+        -> prepare print layout -> Review button -> saved photos
+```
+
+The preview preserves the full captured aspect ratio without mirroring or
+stretching. It is downsampled to at most 640 x 360 and refreshed approximately
+five times per second, depending on camera/processing speed. It is a framing aid,
+not a guarantee of final exposure or focus. The print layout center-crops photos
+further; print-crop guides are not implemented. Preview errors are displayed
+explicitly and return to the options, preserving any completed photos.
+
+## DIY box layout
+
+Start with a sturdy reused shipping box, reinforced with a second layer of
+cardboard around the screen and mounting points. These are **concept sketches,
+not measured cutting templates**. Measure the actual LCD, Pi/cooler, connectors,
+and cables before choosing the box or cutting holes. Keep the printer external
+for this first build.
+
+![Photobooth front and labeled internal connection map: camera ribbon, HDMI video, USB touch, Pi USB-C power, fan lead, and optional LCD power.](./images/box-layout.png)
+
+[Open the full-size illustration](./images/box-layout.svg).
+
+### How to read the picture
+
+- **Left: front view.** The camera and LCD both face the people. The lens sits
+  just above the screen, near the front surface. Keep it near eye level when the
+  box is on its table/stand. A deep or narrow opening can block a wide-angle
+  view; check captured photos for dark corners.
+- **Right: open back.** The camera board connects to the Pi with a gently curved
+  ribbon. The screen sits behind the front panel. Put the Pi/cooler on a separate
+  reinforced mount with air space and side vents; use the box depth so the screen
+  and connectors do not collide. The drawing is not to scale.
+- **Right-hand cable map:** each colored cable ends at a labeled connector.
+  Letters A-E match the checklist below the drawing. Port locations are
+  simplified to make the paths readable; this is not a physical Pi board map
+  or ribbon-contact orientation guide.
+- **Screen connections depend on the LCD.** The example specifically assumes
+  an HDMI + USB touchscreen. A DSI screen uses a different connection plan;
+  do not buy the illustrated display cables until the LCD model is confirmed.
+- **Mounting:** support the LCD by its bezel or mounting points, not pressure on
+  the glass. Use suitable Pi standoffs and camera board mounting points, keeping
+  exposed contacts clear of metal. Do not press on the autofocus mechanism.
+- **Access and power:** keep the back reopenable, allow access to the SD card
+  and needed ports, and begin with external Pi power. Shut down and unplug before
+  adjusting boards or cables. Do not sharply fold or pull the camera ribbon.
+
+### Cables shown in the illustration
+
+| Label | Connection | Cable / requirement |
+| --- | --- | --- |
+| A | Camera Module 3 Wide to Pi 5 CAM/DISP 0 or 1 | Pi 5-compatible **22-pin-to-15-pin camera ribbon**: 15-pin end at the camera, 22-pin end at the Pi. |
+| B | Pi micro-HDMI 0 to LCD HDMI input | **micro-HDMI at the Pi**, with an HDMI connector matching the LCD at the other end. This carries the picture, not USB touch input or screen power. |
+| C | Pi USB-A to LCD USB touch/data input | A **data-capable USB cable** with the correct screen-side connector. Depending on the LCD, this may also supply its power. |
+| D | External supply to Pi USB-C power port | A properly rated Pi 5 supply; the official **27 W USB-C supply** is a straightforward starting point. |
+| E | Active Cooler to Pi FAN header | The cooler's own fan lead; do not substitute a USB cable or improvise GPIO wiring. |
+| Dashed | Optional external LCD supply to its power input | Only if required by that screen. Use its specified voltage, polarity, connector, and power rating; do not assume any USB port can power it. |
+
+Use the camera and display manufacturers' installation guides for ribbon
+orientation and port identification. A camera ribbon and a display ribbon are
+not interchangeable just because their connectors look similar. The picture
+does not specify mains wiring, a battery system, or a printer power connection.
+
+### Build in this order
+
+1. Lay the components on a table and connect/test them before enclosing anything.
+2. Mark the front camera and screen positions on scrap cardboard. Check cable
+   reach, finger access, and camera framing before cutting the final panel.
+3. Reinforce the box, add mounts, and make the display, lens, cable, and vent
+   openings. Cut/drill with all electronics removed; clear debris before assembly.
+4. Install and secure the components, leaving the back open for the first tests.
+   Start with the normal external Pi power supply rather than improvised wiring.
+5. Test touch controls, captured-image framing, stability, and cooling with the
+   box closed before carrying it around. Do not treat cardboard as weatherproof
+   or leave a powered prototype unattended.
+
+Do not add a carrying handle to thin cardboard without reinforcing its attachment
+points. Carry the first prototype from underneath. A future integrated printer
+would need a larger enclosure, separate power planning, service access, and the
+manufacturer's required front/rear paper-path clearance.
 
 ## Raspberry Pi setup
 
@@ -134,10 +228,12 @@ python3 photobooth.py --output /home/pi/Pictures/photobooth
 ```
 
 The timer starts again after each capture completes, so capture time is additional
-to the selected delay. The first shot also includes about two seconds of camera
-initialization/exposure settling. Capture runs off the UI thread to keep the
-screen responsive. Failed captures display an error; completed photos remain on
-disk. Photos are not automatically deleted, so monitor available storage.
+to the selected delay. Camera initialization and about two seconds of exposure
+settling happen during positioning. Slow initialization may extend the wait
+beyond 15 seconds. Preview, capture, and cleanup share one worker thread so they
+cannot access Picamera2 concurrently; Tk image updates happen on the UI thread.
+Failed previews/captures display an error; completed photos remain on disk.
+Photos are not automatically deleted, so monitor available storage.
 
 ## Print layout and future printing
 
@@ -186,7 +282,7 @@ Inspired by overtinker's portable photobooth, with different controls and flow.
 
 1. Set up Raspberry Pi 5 access and test the camera and LCD independently.
 2. Split the LCD and capture programs as described above, preserving the fixed
-   15-second positioning countdown and preparing the camera during that wait.
+   15-second positioning countdown, live view, and background camera preparation.
 3. Test the complete 3/4-photo flow, countdowns, saved files, Review, and recovery
    from camera errors on the Pi.
 4. Confirm the printer model and paper dimensions, test the composed strip
