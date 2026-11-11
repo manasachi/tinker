@@ -1,7 +1,227 @@
 # Portable photobooth
 
-Basic Python touchscreen app for a Raspberry Pi 5, a Raspberry Pi Camera Module,
-and an LCD running the Raspberry Pi OS desktop.
+Basic Python touchscreen app for Raspberry Pi OS with Picamera2.
+
+## Current hardware and small-screen mode
+
+- **Pi:** Raspberry Pi 3B+ (not Pi 5).
+- **Display:** Keyestudio KS0214 RPI TFT 3.5 Touch Shield, 480 x 320 pixels,
+  resistive touch, connected through the GPIO header. An ILI9486-compatible
+  DRM driver is verified on this unit; see the driver setup below.
+- **Camera:** Raspberry Pi Camera Module 3 Wide. The Pi 3B+ uses the standard
+  15-pin camera ribbon, not the Pi 5's 22-pin adapter.
+- **Power:** use a suitable Pi 3B+ micro-USB supply; the official specification
+  recommends 5.1 V / 2.5 A. The TFT takes power through its shield connection.
+
+The app automatically chooses a compact layout on desktops smaller than
+640 x 400. To test that layout as a 480 x 320 window on your HDMI monitor:
+
+```sh
+python3 photobooth.py --compact
+```
+
+Once the TFT shows a working desktop, launch from a terminal on that desktop:
+
+```sh
+python3 photobooth.py --compact --fullscreen
+```
+
+The compact layout uses pixel-sized fonts, smaller Review controls, and a
+480 x 270 maximum camera preview, refreshed roughly three times per second
+depending on processing speed. Original captures and print-layout resolution
+are unchanged. If HDMI is the primary screen, automatic detection may see its
+larger dimensions; use `--compact` explicitly. This flag changes layout only,
+not which physical display the desktop uses.
+
+### Show only the UI on the LCD
+
+From a terminal in the Pi's graphical desktop session, run:
+
+```sh
+cd ~/portable-photobooth
+python3 photobooth.py --lcd
+```
+
+`--lcd` reads the enabled `SPI-1` output's current position, dimensions, and
+rotation, then fills only that LCD with a borderless UI. It does not move the
+HDMI desktop, change display settings, or enable boot-time autostart. Escape
+closes the LCD window. The desktop still runs underneath but is covered while
+the program is open. If the LCD or Wayland output query is unavailable, the
+program reports an error instead of silently opening on HDMI.
+Errors also appear inside the LCD bounds with a touchscreen-sized **OK**
+button, rather than opening a blocking dialog on HDMI.
+
+The main booth needs a detected camera before it can capture. If camera
+preparation fails, the countdown stops and an error is shown; acknowledging it
+returns to the options. A paused countdown is not a successful photo session.
+Use `display_test.py --lcd` for camera-free testing. Shut down and disconnect
+power before connecting or reseating the camera's CSI ribbon.
+
+Portrait outputs use a 320 x 480 compact layout with stacked option cards and
+countdown text. For a portrait window without LCD targeting, use `--portrait`.
+Review has no separate "Photo N of N" heading, leaving more room for the image;
+photos retain their aspect ratio.
+
+Ordinary SSH sessions do not inherit the desktop environment. On the current
+Pi, an SSH launch can use:
+
+```sh
+DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u) WAYLAND_DISPLAY=wayland-0 python3 photobooth.py --lcd
+```
+
+### Test pictures without a camera
+
+Install these on the Pi; Picamera2 is not needed for this test:
+
+```sh
+sudo apt update
+sudo apt install python3-tk python3-pil python3-pil.imagetk
+cd ~/portable-photobooth
+python3 display_test.py
+```
+
+Press **Simulate 4 photos**. The test generates one numbered sample image per
+second, keeps all four as Pillow images in RAM, and then offers **Review**.
+Next/Previous show them one at a time; New test clears the images. Nothing is
+saved or printed. To use your own four pictures instead:
+
+```sh
+python3 display_test.py --images photo1.jpg photo2.jpg photo3.jpg photo4.jpg
+```
+
+On a working TFT desktop, add `--fullscreen`. The test uses a 480 x 320 window
+by default and does not modify display drivers or boot settings. Image data is
+kept in memory, although supplied images are read from disk.
+
+Use `python3 display_test.py --lcd` to put only the camera-free test UI on the
+LCD, respecting portrait rotation. This opens the start screen; it does not
+automatically simulate a session.
+
+### White KS0214 screen: software prerequisites
+
+A lit white panel is not yet a working graphical display. Tkinter and Pillow
+cannot initialize the TFT controller: the OS needs a compatible display driver,
+desktop output configuration, and touch driver/calibration.
+
+The [manufacturer's guide](https://docs.keyestudio.com/projects/KS0214/en/latest/docs/KS0214.html)
+identifies ILI9481 and gives legacy Pi 3/4 instructions using old images.
+Do not flash its Jessie image for this project: it is obsolete and not the
+modern Picamera2 environment used here.
+
+Despite that guide's controller name, its official driver archive contains
+a `waveshare35a` overlay declaring `ilitek,ili9486`, with reset on BCM GPIO25,
+data/command on GPIO24, and ADS7846 touch interrupt on GPIO17. These match the
+modern `piscreen` overlay's DRM option. The following setup was verified on
+the current Pi 3B+ with Debian 13 Trixie and kernel `6.18.50+rpt-rpi-v8`:
+
+```sh
+/usr/sbin/modinfo -F filename ili9486
+dtoverlay -h piscreen
+sudo dtoverlay piscreen drm rotate=0 speed=15000000
+```
+
+Check that the driver exists and the overlay help lists `drm` before loading it.
+This temporary test requires no reboot or boot-file edits. The overlay enables
+SPI0 itself. Keep `vc4-kms-v3d` enabled: HDMI and the TFT can work together.
+Do not load the overlay again if it is already active.
+
+Verification:
+
+```sh
+dtoverlay -l
+grep . /sys/class/graphics/fb*/name
+wlr-randr
+```
+
+In the verified session, `fb1` was `ili9486drmfb` and the desktop exposed an
+enabled `SPI-1` output at 480 x 320. The LCD showed the desktop, then all four
+RAM-only test images rendered on that output with working-size review controls.
+The ADS7846 touchscreen was subsequently calibrated using five physical stylus
+taps, and button interaction was confirmed. Framebuffer numbers and output
+positions can differ.
+
+To keep the driver enabled after reboot, first back up
+`/boot/firmware/config.txt` without overwriting an earlier backup:
+
+```sh
+sudo cp -n /boot/firmware/config.txt /boot/firmware/config.txt.before-ks0214
+sudo nano /boot/firmware/config.txt
+```
+
+Add this line under the existing `[all]` section, once:
+
+```ini
+dtoverlay=piscreen,drm,rotate=0,speed=15000000
+```
+
+If the temporary overlay is already active, the boot-file change is for future
+boots; there is no need to load it again. A reboot check is still required to
+confirm startup behavior. To roll back, remove only that added overlay line
+and reboot. A temporary-only load disappears on reboot.
+
+With HDMI attached, the TFT may be an extended desktop rather than the primary
+display. Move the test window onto the TFT before using fullscreen; fullscreen
+alone does not select a physical display. Running the program on HDMI proves
+the app works, not that the TFT is configured.
+
+Keep HDMI and SSH available, and back up the SD card before driver/boot changes.
+Shut down and disconnect power before adjusting the GPIO shield; match the
+manufacturer's header alignment.
+
+### Portrait rotation and touchscreen mapping
+
+The current Pi uses the desktop's `kanshi` output manager for a 90-degree
+rotation, leaving the kernel overlay at `rotate=0`. With HDMI connected, its
+LCD profile is:
+
+```text
+profile photobooth-dual {
+    output HDMI-A-1 enable position 0,0
+    output SPI-1 enable position 1920,0 transform 90
+}
+
+profile photobooth-lcd {
+    output SPI-1 enable position 0,0 transform 90
+}
+```
+
+This is stored in `~/.config/kanshi/config`; the dual-display position matches
+the current 1920-pixel-wide HDMI monitor. Back up existing settings before
+changing them. Do not combine this desktop rotation with a second 90-degree
+kernel rotation.
+
+The KS0214 has a resistive screen: use a gentle, deliberate press with a plastic
+stylus. A cursor moving on HDMI confirms input is present but mapped to the
+wrong output. The current labwc session uses merged configuration (`labwc -m`);
+the LCD-specific entry in `~/.config/labwc/rc.xml` is:
+
+```xml
+<labwc_config>
+  <touch deviceName="ADS7846 Touchscreen" mapToOutput="SPI-1" mouseEmulation="yes" />
+  <libinput>
+    <device category="ADS7846 Touchscreen">
+      <calibrationMatrix>1.13120444 -0.00563022 -0.06340731 -0.01122577 -1.11252436 1.07903350</calibrationMatrix>
+    </device>
+  </libinput>
+</labwc_config>
+```
+
+Merge this entry with existing user settings rather than replacing them.
+Mouse emulation delivers clicks to Tk buttons; output mapping keeps them on
+the LCD. Rotation/alignment also needs the device's libinput
+`calibrationMatrix`, under a device category named `ADS7846 Touchscreen`.
+An initial rotation alone did not align this unit accurately enough to hit
+buttons. The matrix above was calculated from five physical stylus taps on
+this unit, with a maximum fitting error of about 2.1 pixels. It is specific
+to this unit and the configured 90-degree desktop rotation; recalibrate if
+the screen or rotation changes. The calculation accounts for the compositor's
+output transform as well as libinput calibration; omitting the compositor
+transform left presses inverted after the first calibration.
+Verify button presses after applying it:
+device detection or a rendered image alone is not a successful touch test.
+
+Reload labwc using its supported `labwc --reconfigure` command from the
+desktop session. Do not send SIGUSR1: that ended the session on this version.
 
 ## Target flow (latest design)
 
@@ -121,13 +341,20 @@ Options -> live view + 15-second countdown -> capture
 ```
 
 The preview preserves the full captured aspect ratio without mirroring or
-stretching. It is downsampled to at most 640 x 360 and refreshed approximately
-five times per second, depending on camera/processing speed. It is a framing aid,
+stretching. It is downsampled to at most 640 x 360 in standard mode or 480 x 270
+in compact mode, refreshed approximately five or three times per second
+respectively, depending on camera/processing speed. It is a framing aid,
 not a guarantee of final exposure or focus. The print layout center-crops photos
 further; print-crop guides are not implemented. Preview errors are displayed
 explicitly and return to the options, preserving any completed photos.
 
 ## DIY box layout
+
+**Illustration below is the earlier Pi 5 + HDMI/USB display example, not the
+current Pi 3B+ + KS0214 wiring.** For the current setup, the TFT plugs into the
+GPIO header, the camera uses the Pi 3B+'s separate 15-pin CSI connector, and power
+enters through micro-USB. HDMI is for the external setup monitor. Do not buy the
+Pi 5 cables or cooler from this example for the Pi 3B+.
 
 Start with a sturdy reused shipping box, reinforced with a second layer of
 cardboard around the screen and mounting points. These are **concept sketches,

@@ -15,9 +15,12 @@ covers that future split.
 
 Use Raspberry Pi OS Bookworm or newer with a desktop session.
 
-1. Power off the Pi before connecting or adjusting the camera ribbon cable.
-   The Pi 5 needs a compatible 22-pin-to-15-pin camera cable for Camera Module 3.
-2. Boot the Pi and check that the LCD shows the desktop.
+1. Current hardware is Pi 3B+ + Keyestudio KS0214 (480 x 320 GPIO shield).
+   Power off and unplug before adjusting the shield or camera ribbon.
+   Pi 3B+ uses the standard 15-pin camera cable. Only Pi 5 needs the 22-pin adapter.
+2. Boot the Pi and check that the LCD shows the desktop. A white backlight is
+   not a pass. Before installing a driver, identify the OS/kernel with
+   `cat /etc/os-release` and `uname -r`; follow the README's KS0214 guidance.
 3. Check that touchscreen taps select desktop controls. A mouse can be used
    temporarily to distinguish touchscreen problems from app problems.
 4. Open a terminal on the Pi desktop and install dependencies:
@@ -40,6 +43,41 @@ Use Raspberry Pi OS Bookworm or newer with a desktop session.
 If the camera is not detected, shut down before checking cables; do not hot-plug
 the camera.
 
+### Phase 1A: four pictures in memory, no camera required
+
+On the Pi desktop:
+
+```sh
+sudo apt update
+sudo apt install python3-tk python3-pil python3-pil.imagetk
+cd ~/portable-photobooth
+python3 display_test.py
+```
+
+- [ ] A 480 x 320 test window fits and all text/buttons are visible.
+- [ ] Tap Simulate 4 photos; the counter advances to four without more taps.
+- [ ] Review appears only after all four images have been generated in RAM.
+- [ ] Review shows PHOTO 1 through PHOTO 4 in order using Next/Previous.
+- [ ] Previous/Next are disabled at the appropriate ends.
+- [ ] New test clears the images and returns to the start screen.
+- [ ] No photos or print jobs are created.
+
+On a configured TFT desktop, repeat with `python3 display_test.py --fullscreen`
+and use touch instead of the mouse. Test optional input files with
+`--images photo1.jpg photo2.jpg photo3.jpg photo4.jpg`.
+With both HDMI and the LCD connected, use `python3 display_test.py --lcd` to
+target the LCD explicitly. Confirm that only the borderless test UI covers it,
+and that portrait rotation is detected. Review should have no top counter.
+
+**Pass:** actual image display and touch work on the TFT. Passing on HDMI only
+checks the program, not the TFT driver. A camera is not required for this phase.
+
+On the current Pi 3B+/Trixie setup, the DRM driver, 480 x 320 `SPI-1` output,
+and four-image RAM capture/review have been verified over SSH, including a
+screenshot of the TFT output. Physical stylus calibration and button interaction
+have subsequently been confirmed. Post-reboot startup still needs a separate
+check; it is not covered by that rendering test.
+
 ## Phase 2: Automated logic checks
 
 From the copied project folder:
@@ -48,6 +86,19 @@ From the copied project folder:
 cd ~/portable-photobooth
 python3 -m unittest -v
 ```
+
+For real Tk layout checks in a desktop session, also run:
+
+```sh
+PHOTOBOOTH_GUI_TESTS=1 python3 -m unittest -v
+```
+
+These optional tests check options, countdown/preview controls, and Review at
+480 x 320, 320 x 480 portrait, and 800 x 480; ordinary headless runs skip them.
+LCD-targeting tests check rotation, exact output bounds, and explicit errors
+for an absent, disabled, or unconfigured LCD.
+Error tests check that LCD-mode dialogs stay in the LCD's bounds, and that
+an undetected camera produces an actionable error rather than a failed capture.
 
 These tests do not require a camera or a running graphical display, but Python
 must have Tkinter installed because the application imports it.
@@ -78,10 +129,12 @@ Run from the Pi's desktop terminal, not an ordinary SSH-only terminal:
 
 ```sh
 cd ~/portable-photobooth
-python3 photobooth.py --fullscreen --output "$HOME/Pictures/photobooth-test"
+python3 photobooth.py --compact --fullscreen --output "$HOME/Pictures/photobooth-test"
 ```
 
 - [ ] Options fit the LCD and can be selected by touch.
+- [ ] While still on HDMI, verify the small-window layout first using
+      `python3 photobooth.py --compact` without fullscreen.
 - [ ] Options show "Make a little memory" as a large green heading; selected
       choices are highlighted in lime and have a pressed appearance.
 - [ ] Changing either choice updates the photo-count/countdown summary.

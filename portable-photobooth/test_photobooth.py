@@ -1,5 +1,8 @@
 from pathlib import Path
+import json
+import os
 import tempfile
+import tkinter as tk
 import unittest
 from concurrent.futures import Future
 from types import SimpleNamespace
@@ -8,7 +11,70 @@ import sys
 
 from PIL import Image, ImageChops
 
-from photobooth import PhotoBooth, PiCamera, Session
+from photobooth import PhotoBooth, PiCamera, Session, lcd_geometry, place_on_lcd, show_error
+
+
+class LCDLaunchTests(unittest.TestCase):
+    def output(self, transform="normal"):
+        return {
+            "name": "SPI-1", "enabled": True, "transform": transform, "scale": 1.0,
+            "position": {"x": 1920, "y": 0},
+            "modes": [{"width": 480, "height": 320, "current": True}],
+        }
+
+    def test_lcd_geometry_follows_output_rotation_and_position(self):
+        for transform, dimensions in (
+            ("normal", (480, 320)), ("90", (320, 480)), ("270", (320, 480)),
+        ):
+            with self.subTest(transform=transform), patch(
+                "photobooth.subprocess.run",
+                return_value=SimpleNamespace(stdout=json.dumps([self.output(transform)])),
+            ):
+                self.assertEqual(lcd_geometry(), (*dimensions, 1920, 0))
+
+    def test_missing_disabled_or_unconfigured_lcd_reports_error(self):
+        disabled = self.output()
+        disabled["enabled"] = False
+        no_mode = self.output()
+        no_mode["modes"] = []
+        for outputs in ([], [disabled], [no_mode]):
+            with self.subTest(outputs=outputs), patch(
+                "photobooth.subprocess.run",
+                return_value=SimpleNamespace(stdout=json.dumps(outputs)),
+            ):
+                with self.assertRaises(ValueError):
+                    lcd_geometry()
+
+    def test_lcd_window_has_no_decoration_and_uses_exact_output_bounds(self):
+        root = Mock()
+        place_on_lcd(root, (320, 480, -320, 0))
+        root.overrideredirect.assert_called_once_with(True)
+        root.geometry.assert_called_once_with("320x480-320+0")
+
+    def test_lcd_error_dialog_stays_inside_lcd_bounds(self):
+        root = Mock()
+        root.overrideredirect.return_value = True
+        root.winfo_geometry.return_value = "320x480+1920+0"
+        root.winfo_width.return_value = 320
+        with patch("photobooth.tk.Toplevel") as top, \
+                patch("photobooth.tk.Label"), patch("photobooth.tk.Message"), \
+                patch("photobooth.tk.Button") as button, \
+                patch("photobooth.messagebox.showerror") as desktop_error:
+            show_error(root, "Camera failed", "No camera detected")
+        dialog = top.return_value
+        top.assert_called_once_with(root)
+        dialog.geometry.assert_called_once_with("320x480+1920+0")
+        dialog.grab_set.assert_called_once()
+        root.wait_window.assert_called_once_with(dialog)
+        self.assertEqual(button.call_args.kwargs["command"], dialog.destroy)
+        desktop_error.assert_not_called()
+
+    def test_normal_window_keeps_standard_error_dialog(self):
+        root = Mock()
+        root.overrideredirect.return_value = False
+        with patch("photobooth.messagebox.showerror") as desktop_error:
+            show_error(root, "Camera failed", "No camera detected")
+        desktop_error.assert_called_once_with("Camera failed", "No camera detected", parent=root)
 
 
 class FakeCamera:
@@ -131,6 +197,8 @@ class SessionTests(unittest.TestCase):
 class LayoutFlowTests(unittest.TestCase):
     def make_app(self):
         app = PhotoBooth.__new__(PhotoBooth)
+        app.compact = False
+        app.portrait = False
         app.closed = False
         app.active = True
         app.previewing = True
@@ -138,6 +206,7 @@ class LayoutFlowTests(unittest.TestCase):
         for name in ("root", "worker", "camera", "session", "status", "countdown",
                      "clear", "label", "button"):
             setattr(app, name, Mock())
+        app.root.overrideredirect.return_value = False
         app.session.photos = []
         app.session.photo_count = 3
         app.session.interval = 5
@@ -303,6 +372,20 @@ class LayoutFlowTests(unittest.TestCase):
 
 
 class PiCameraTests(unittest.TestCase):
+    def test_missing_camera_reports_actionable_error_without_opening_device(self):
+        camera_class = Mock()
+        camera_class.global_camera_info.return_value = []
+        with patch.dict(
+            sys.modules,
+            picamera2=SimpleNamespace(Picamera2=camera_class),
+            libcamera=SimpleNamespace(controls=Mock()),
+        ):
+            camera = PiCamera()
+            with self.assertRaisesRegex(RuntimeError, "No camera detected"):
+                camera.prepare()
+        camera_class.assert_not_called()
+        self.assertIsNone(camera.camera)
+
     def test_preview_and_capture_share_one_camera_and_enable_autofocus(self):
         hardware = Mock()
         hardware.camera_controls = {"AfMode": ()}
@@ -345,6 +428,73 @@ class PiCameraTests(unittest.TestCase):
             self.assertIs(camera.camera, hardware)
             hardware.set_controls.assert_not_called()
             camera.close()
+
+
+@unittest.skipUnless(
+    os.environ.get("PHOTOBOOTH_GUI_TESTS") == "1",
+    "Set PHOTOBOOTH_GUI_TESTS=1 in a desktop session to test real Tk widgets.",
+)
+class DisplayLayoutTests(unittest.TestCase):
+    def assert_layout_fits(self, root, width, height):
+        root.update_idletasks()
+        self.assertLessEqual(root.winfo_reqwidth(), width)
+        self.assertLessEqual(root.winfo_reqheight(), height)
+
+    def test_options_preview_and_review_fit_all_display_sizes(self):
+        for compact, portrait, width, height in (
+            (True, False, 480, 320), (False, False, 800, 480),
+            (True, True, 320, 480),
+        ):
+            with self.subTest(compact=compact, portrait=portrait), tempfile.TemporaryDirectory() as output:
+                root = tk.Tk()
+                root.withdraw()
+                app = PhotoBooth(root, Path(output), False, compact=compact, portrait=portrait)
+                try:
+                    self.assert_layout_fits(root, width, height)
+                    app.count.set(3)
+                    app.interval.set(10)
+                    self.assertEqual(app.summary.get(), "3 photos  /  10 seconds between shots")
+                    with patch.object(app, "request_preview"), patch.object(app, "tick"):
+                        app.start()
+                    app.status.config(text="Get situated! Photo 1 of 4")
+                    app.countdown.config(text="Smile!")
+                    self.assert_layout_fits(root, width, height)
+                    session = app.session
+                    session.directory.mkdir()
+                    for index in range(3):
+                        path = session.directory / f"photo_{index}.jpg"
+                        Image.new("RGB", (800, 450), "green").save(path)
+                        session.photos.append(path)
+                    app.previewing = False
+                    future = Future()
+                    future.set_result(Path("print_layout.png"))
+                    app.check_layout(future, session)
+                    self.assert_layout_fits(root, width, height)
+                    for index in range(3):
+                        app.show_photo(index)
+                        self.assert_layout_fits(root, width, height)
+                        self.assertFalse(any(
+                            isinstance(widget, tk.Label)
+                            and str(widget.cget("text")).startswith("Photo ")
+                            for widget in app.frame.winfo_children()
+                        ))
+                    app.show_options()
+                    self.assert_layout_fits(root, width, height)
+                finally:
+                    app.close()
+
+    def test_small_display_selects_compact_layout_automatically(self):
+        root = tk.Tk()
+        root.withdraw()
+        with patch.object(root, "winfo_screenwidth", return_value=480), \
+                patch.object(root, "winfo_screenheight", return_value=320):
+            app = PhotoBooth(root, Path("unused"), False)
+        try:
+            self.assertTrue(app.compact)
+            self.assertEqual(app.camera.preview_size, (480, 270))
+            self.assert_layout_fits(root, 480, 320)
+        finally:
+            app.close()
 
 
 if __name__ == "__main__":
