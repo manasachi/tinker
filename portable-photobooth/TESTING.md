@@ -244,3 +244,17 @@ Observed timing or image issues:
 Exact error message:
 Next action:
 ```
+
+
+```
+scp -r /Users/manasachinta/go/src/repos/tinker/portable-photobooth manasachi@172.16.249.89:~/
+
+cd ~/portable-photobooth
+python3 -m unittest -v
+python3 photobooth.py --fullscreen
+
+
+ssh into the pi:
+
+ssh manasachi@172.16.249.89
+```

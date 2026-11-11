@@ -150,11 +150,7 @@ class PhotoBooth:
         tk.Label(
             self.frame, text="Your moment, your photo strip.",
             font=("Arial", 25, "bold"), bg=CREAM, fg=FOREST,
-        ).pack()
-        tk.Label(
-            self.frame, text="Pick your photos and pace. We'll handle the rest.",
-            font=("Arial", 12), bg=CREAM, fg=FOREST,
-        ).pack(pady=(4, 16))
+        ).pack(pady=(0, 16))
         self.count = tk.IntVar(value=4)
         self.interval = tk.IntVar(value=5)
         cards = tk.Frame(self.frame, bg=CREAM)
