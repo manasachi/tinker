@@ -29,7 +29,7 @@ POSITIONING_SECONDS = 15
 def render_strip_footer(text: str):
     from PIL import Image, ImageDraw, ImageFont
 
-    footer = Image.new("RGB", (600, 300), "white")
+    footer = Image.new("RGB", (600, 300), "black")
     draw = ImageDraw.Draw(footer)
     for size in range(64, 27, -2):
         try:
@@ -55,7 +55,7 @@ def render_strip_footer(text: str):
         if width <= 540 and height <= 240:
             draw.multiline_text(
                 ((600 - width) / 2 - left, (300 - height) / 2 - top),
-                wrapped, font=font, fill=FOREST, spacing=8, align="center",
+                wrapped, font=font, fill="white", spacing=8, align="center",
             )
             return footer
     raise ValueError("Message is too long to print clearly. Please shorten it.")
@@ -198,7 +198,7 @@ class Session:
         photo_height = (
             photo_area_height - 2 * margin - gap * (self.photo_count - 1)
         ) // self.photo_count
-        strip = Image.new("RGB", (strip_width, height), "white")
+        strip = Image.new("RGB", (strip_width, height), "black")
         for index, path in enumerate(self.photos):
             with Image.open(path) as photo:
                 oriented = ImageOps.exif_transpose(photo).convert("RGB")
@@ -209,7 +209,7 @@ class Session:
                 strip.paste(fitted, (margin, margin + index * (photo_height + gap)))
         if footer is not None:
             strip.paste(footer, (0, photo_area_height))
-        sheet = Image.new("RGB", (strip_width * 2, height), "white")
+        sheet = Image.new("RGB", (strip_width * 2, height), "black")
         sheet.paste(strip, (0, 0))
         sheet.paste(strip, (strip_width, 0))
         path = self.directory / "print_layout.png"

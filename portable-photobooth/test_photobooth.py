@@ -32,7 +32,7 @@ class StripFooterTests(unittest.TestCase):
                 footer = render_strip_footer(text)
                 self.assertEqual(footer.size, (600, 300))
                 bounds = ImageChops.difference(
-                    footer, Image.new("RGB", footer.size, "white"),
+                    footer, Image.new("RGB", footer.size, "black"),
                 ).getbbox()
                 self.assertIsNotNone(bounds)
                 left, top, right, bottom = bounds
@@ -40,6 +40,8 @@ class StripFooterTests(unittest.TestCase):
                 self.assertGreaterEqual(top, 30)
                 self.assertLessEqual(right, 570)
                 self.assertLessEqual(bottom, 270)
+                self.assertEqual(footer.getpixel((0, 0)), (0, 0, 0))
+                self.assertEqual(footer.getextrema(), ((0, 255), (0, 255), (0, 255)))
 
     def test_text_that_cannot_fit_is_rejected_without_truncation(self):
         for text in ("W" * 100, "Party\n" * 30):
@@ -233,7 +235,9 @@ class SessionTests(unittest.TestCase):
                     left = sheet.crop((0, 0, 600, 1800))
                     right = sheet.crop((600, 0, 1200, 1800))
                     self.assertIsNone(ImageChops.difference(left, right).getbbox())
-                    self.assertEqual(sheet.getpixel((0, 0)), (255, 255, 255))
+                    self.assertEqual(sheet.getpixel((0, 0)), (0, 0, 0))
+                    for x in (0, 599, 600, 1199):
+                        self.assertEqual(sheet.getpixel((x, 900)), (0, 0, 0))
                     slot_height = (1800 - 60 - 30 * (count - 1)) // count
                     for index, color in enumerate(colors[:count]):
                         y = 30 + index * (slot_height + 30) + slot_height // 2
@@ -241,7 +245,7 @@ class SessionTests(unittest.TestCase):
                         self.assertTrue(all(abs(a - b) <= 2 for a, b in zip(actual, color)))
                     for index in range(count - 1):
                         y = 30 + index * (slot_height + 30) + slot_height + 15
-                        self.assertEqual(sheet.getpixel((300, y)), (255, 255, 255))
+                        self.assertEqual(sheet.getpixel((300, y)), (0, 0, 0))
                 self.assertEqual([path.read_bytes() for path in session.photos], originals)
 
     def test_print_layout_rejects_incomplete_session(self):
@@ -282,7 +286,7 @@ class SessionTests(unittest.TestCase):
                                 sheet.crop((0, 1500, 600, 1800)),
                                 render_strip_footer(text.strip()),
                             ).getbbox())
-                            self.assertEqual(sheet.getpixel((300, 1499)), (255, 255, 255))
+                            self.assertEqual(sheet.getpixel((300, 1499)), (0, 0, 0))
                         else:
                             self.assertEqual(sheet.getpixel((300, 1700)), color)
                             self.assertEqual(session.strip_text, "")

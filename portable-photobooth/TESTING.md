@@ -112,7 +112,7 @@ must have Tkinter installed because the application imports it.
 - Rejection of unsupported options.
 - A simulated failed capture not being added to the saved-photo list, followed by a
   successful retry.
-- Print-sheet dimensions/DPI, matching left/right strips, photo order, white
+- Print-sheet dimensions/DPI, matching left/right strips, photo order, black
   gaps, EXIF orientation, and unchanged original files for 3/4-photo layouts.
 - Optional message layout: exactly 1,500 pixels for photos and 300 for text;
   blank/whitespace text restores the full 1,800-pixel photo region. Both strip
@@ -181,10 +181,18 @@ If controls are clipped on the actual LCD resolution, record that as a failure.
 
 Check `print_layout.png` for both 3- and 4-photo sessions, with and without a
 message. Text must occupy only the bottom 300 pixels of each 1,800-pixel strip.
+Borders, inter-photo gaps, and footer backgrounds must be black; footer text
+must be white. Original camera images and the LCD theme must remain unchanged.
 When blank, the last photo must extend into that former footer area. The message
 should be reused on the next session until edited/cleared, while existing saved
 layouts remain unchanged. Actual printed inch measurements depend on paper and
 driver scaling; Canon's 148 mm height is shorter than a true 6-inch sheet.
+
+For the first printer test, run `python3 print_test.py` to generate circle
+samples instead of reading personal images. Inspect its generated PNG, then
+print just one sheet using the printer's advertised postcard media settings.
+The command itself must not send a print job. See the README's CP1500 setup
+section; a generated layout does not verify connectivity or actual output.
 
 ### Optional shutter audio
 

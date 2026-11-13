@@ -80,7 +80,7 @@ also works. **Save** applies the message; **Cancel** leaves it unchanged.
 are preserved when returning from the editor.
 
 - With text: the top **5/6** is the photo area and the bottom **1/6** is the
-  message area, for either 3 or 4 photos. Text is centered in dark green on white,
+  message area, for either 3 or 4 photos. Text is centered in white on black,
   wraps automatically, and shrinks to fit. Messages too long to print clearly
   are rejected instead of cut off.
 - Without text (including only whitespace): photos use the full strip height;
@@ -541,7 +541,9 @@ portrait orientation. Each half is a 600 x 1,800 pixel strip (nominally 2 x 6
 inches). Cut the printed sheet vertically down the center to separate the copies;
 this is not continuous-roll printing or automatic cutting.
 
-The photos appear top to bottom in capture order, with white borders and gaps.
+The photos appear top to bottom in capture order, with solid black borders and gaps.
+The message area is also black, with white text for contrast. This affects the
+printed layout only; the cream-and-green LCD theme is unchanged.
 Three-photo layouts use taller slots; four-photo layouts use shorter slots.
 When a message is present, the photo region is exactly 1,500 pixels tall and
 the message region is 300 pixels tall. With no message, the photo region is
@@ -563,6 +565,59 @@ Linux print queue. Submit the composed sheet as **one print job**, not each phot
 as a separate job. Paper dimensions, scaling, borderless overscan, margins, and
 cutting behavior must be confirmed for the printer. DPI metadata alone does not
 force physical print dimensions. Print remains disabled: no jobs are submitted.
+
+### Canon SELPHY CP1500: first wireless test
+
+The current Pi has a driverless queue named `SELPHY_CP1500`, connected to
+`ipp://CP1500f66dc2.local:631/ipp/print`. On November 13, 2026, CUPS reported
+completion of one generated circle-test sheet (`SELPHY_CP1500-1`) and the queue
+returned to idle. The printer advertised postcard paper loaded and both
+`Postcard` and `Postcard.Borderless` sizes. All 52 tests passed on the Pi,
+including native GUI checks. Physical output quality still needs inspection.
+
+The test used one copy with `PageSize=Postcard.Borderless`, `print-scaling=fit`,
+`orientation-requested=3`, `sides=one-sided`, and `ColorModel=RGB`.
+The generated sheet is in the Pi's `~/Pictures/photobooth-printer-tests/`
+folder. No personal photos were used. The guest Print button remains disabled;
+this establishes a working test queue, not integrated app printing.
+
+1. On the printer, use its Wi-Fi settings to connect **via a wireless router**
+   to the same network as the Pi. Avoid guest networks with client isolation.
+   Load the matching postcard paper and ink cassette and leave the paper path clear.
+2. On the Pi, open the desktop's printer settings. If printing tools are missing,
+   install CUPS with `sudo apt install cups cups-client` and enable it with
+   `sudo systemctl enable --now cups`.
+3. Add the network SELPHY using its discovered **IPP/AirPrint** service and
+   the **driverless / IPP Everywhere** option. Discovery and available media
+   options need checking on the actual printer; do not install an arbitrary
+   third-party driver or edit a PPD just to force borderless printing.
+4. Generate the same circle samples used by the LCD diagnostic, arranged as
+   two identical four-photo strips on a single sheet:
+
+   ```sh
+   cd ~/portable-photobooth
+   python3 print_test.py
+   ```
+
+   This prints the output path but does **not** submit a job. It never reads
+   personal photos. Optionally add `--strip-text "Test party"` to check the footer.
+5. Open that generated PNG in the image viewer and choose Print. Select the
+   SELPHY, **one copy**, **one image per sheet**, portrait orientation, and the
+   printer's supported **postcard / 100 x 148 mm** paper size. Disable duplex.
+   Use fit-to-page to preserve the entire layout for this first test; borderless
+   fill may crop its edges. Inspect the preview before submitting.
+6. Confirm one sheet prints with two matching strips, four circles per strip,
+   and black borders/gaps. Cut down the center after printing. Check physical
+   dimensions and margins before enabling printing in the guest UI.
+
+Use `lpstat -p -d` to check queues and `lpoptions -p QUEUE -l` to inspect the
+actual printer options (replace `QUEUE` with the discovered queue name).
+Do not assume a paper-size keyword before querying it.
+
+The SELPHY consumes one sheet's worth of dye-sublimation ribbon for each print;
+sparse circle samples do not save ribbon compared with photos. Start with one
+sheet, not repeated test jobs. Raspberry Pi connectivity and physical printing
+must be verified separately; creating the PNG is not proof of a successful print.
 
 ## Basic tests
 
