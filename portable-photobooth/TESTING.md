@@ -27,7 +27,7 @@ Use Raspberry Pi OS Bookworm or newer with a desktop session.
 
    ```sh
    sudo apt update
-   sudo apt install python3-picamera2 python3-pil python3-pil.imagetk python3-tk
+   sudo apt install python3-picamera2 python3-pil python3-pil.imagetk python3-tk python3-cups
    ```
 
 5. Test the camera separately:
@@ -106,8 +106,11 @@ must have Tkinter installed because the application imports it.
 **Pass:** all tests pass. They cover:
 
 - All four valid photo-count/interval combinations.
-- Strip quantities of 2 or 4, a default of 2, rejection of unsupported
-  quantities, and the corresponding 1 or 2 sheets without extra captures.
+- Strip quantities of 1 through 8, a default of 2, rejection of unsupported
+  quantities, and ceiling-rounded sheet counts without extra captures.
+- Read-only copies dropdown at all three display sizes, exact PDF page counts
+  for odd quantities, decoded final-page images with blank right halves,
+  unchanged original PNGs, and one CUPS submission with correct copy settings.
 - Exactly 3 or 4 saved paths, ordered filenames, and rejection of an extra shot.
 - Rejection of unsupported options.
 - A simulated failed capture not being added to the saved-photo list, followed by a
@@ -150,8 +153,9 @@ python3 photobooth.py --compact --fullscreen --output "$HOME/Pictures/photobooth
 - [ ] Options show "Make a little memory" as a large green heading; selected
       choices are highlighted in lime and have a pressed appearance.
 - [ ] Changing any choice updates the photo-count/countdown/strip summary.
-- [ ] The strip selector offers 2 or 4 and defaults to 2. The summary shows
-      1 sheet for 2 strips and 2 sheets for 4 strips.
+- [ ] The copies dropdown offers 1 through 8 individual strips and defaults
+      to 2. The summary shows 1 sheet for 1 or 2 strips, 2 for 3 or 4 strips,
+      3 for 5 or 6 strips, and 4 for 7 or 8 strips.
 - [ ] Tap Strip text and enter a message using the touchscreen keyboard.
       Check case, number/symbol switching, Space, and Back.
 - [ ] Save returns to options without resetting photo, timer, or strip choices.
@@ -171,7 +175,8 @@ python3 photobooth.py --compact --fullscreen --output "$HOME/Pictures/photobooth
 - [ ] A preparing-strips message appears while the print layout is composed.
 - [ ] After layout preparation, only Print / Don't print choices appear.
 - [ ] There is no Review, Previous/Next, or Retake control in the guest flow.
-- [ ] Print is visible, disabled, and sends no print job.
+- [ ] Print is visible and enabled after a successful layout. Do not tap it
+      during a capture-only test: it submits a real job when the printer is ready.
 - [ ] The Print button includes the strip quantity chosen before Start.
 - [ ] Don't print returns to the choices without deleting the saved session.
 - [ ] Escape exits fullscreen; closing the window exits the app.
@@ -343,25 +348,217 @@ After implementation, repeat Phases 3, 4, and 6 with these additional checks:
 
 **Pass:** the target flow in the README is implemented and verified on the Pi.
 
-## Phase 8: Wireless printing (future)
+## Phase 8: Wireless printing and automatic startup
 
-**Blocked until the printer and print integration are available.** For now,
-checking that Print is disabled is sufficient; it does not verify printing.
-
-When implemented:
+Guest printing and portrait LCD autostart are implemented. Unit tests and
+CUPS-reported completion do not substitute for these physical checks:
 
 1. Confirm printer model, Linux support, paper size, margins, and strip/cutting
    behavior.
 2. Print a test strip with numbered images. Check order, orientation, cropping,
    dimensions, and readable faces for both 3-photo and 4-photo layouts.
 3. Confirm one tap submits one job; repeated taps do not duplicate prints.
+   For an authorized odd-quantity test, confirm that only the left strip is
+   printed on the last sheet and that the right half is blank. The printer
+   still consumes a full sheet and ribbon pass. This new behavior has local
+   software coverage and is deployed, but has not yet been physically tested.
 4. Test printer offline, paper out, and lost wireless connection. Failures must
    be visible and saved photos must remain available.
 5. Verify the app distinguishes a job being accepted from a physical print
    completing, according to what the printer actually reports.
+6. Install startup using `python3 booth_startup.py --install`, then
+   `python3 booth_startup.py --start-service` on the Pi desktop. Check
+   `systemctl --user status photobooth.service`. The system journal should
+   contain `Photobooth UI ready` with portrait 320 x 480 geometry.
+7. Shut down the Pi cleanly, disconnect power, power off the printer, then
+   start the printer in Direct Connection mode before powering the Pi.
+   Without a laptop or HDMI monitor, confirm the booth appears on the LCD
+   and a guest session prints. The currently missing camera must be connected
+   with the Pi powered off before verifying actual captures.
+8. A failed or uncertain submission must show an error and keep Print disabled.
+   Inspect the saved `print-job.json` and CUPS before any manual reprint.
+   A pending job must block another submission; it may still print later.
 
 **Pass:** correct physical output and explicit error handling, not merely a
 successful software submission.
+
+### Router-free connection acceptance test
+
+Use the README's `portable_setup.py` steps for one-time SELPHY Direct Connection
+configuration. Do not switch networks through the only SSH management link.
+
+- [ ] With the printer still on home Wi-Fi, `portable_setup.py check` fails
+      explicitly instead of claiming offline readiness. It must not print.
+- [ ] Enable the printer's Direct Connection network and connect the Pi.
+- [ ] The check confirms the `photobooth-selphy-direct` profile, obtains the
+      printer address from the direct-network DHCP server identifier, and
+      verifies a direct route through `wlan0` without a gateway. It must not
+      depend on `.local` name resolution, which failed in the real direct test.
+- [ ] Check the printer screen to confirm Direct Connection, not router mode.
+- [ ] Switch off the home router. Repeat `check`; it must still succeed.
+- [ ] Only after authorizing a sheet, use `check --print-test`. Expect one
+      monochrome four-circle sheet, two strips, no footer, and no duplicate job.
+- [ ] Turn both devices off, then start the printer and Pi again. Confirm
+      saved-network reconnection and repeat `check` without changing credentials.
+- [ ] Turn the printer off. Expect an explicit connection/IPP failure, not a
+      successful offline claim or a silently queued test.
+- [ ] Existing saved Wi-Fi profiles remain available for recovery.
+
+Unit tests cover connection settings, no password in command arguments, wrong
+profile/router-hop rejection, printer identity/readiness errors, explicit
+submission only, DHCP address changes, independence from mDNS, and pending-job
+protection. Mocked success is not a physical
+router-free print or cold-boot acceptance result.
+
+Recorded live direct test: `SELPHY_CP1500_Direct-4` used the guest submission
+backend with a generated monochrome, no-footer sheet. CUPS reported
+`job-completed-successfully`, one completed sheet, and one completed impression.
+The Pi had only the printer's local Wi-Fi route, no external-router route.
+The test restored home Wi-Fi for management. Physical sheet inspection and
+power-off/startup confirmation must be recorded separately.
+The user subsequently confirmed the sheet printed and the options appeared
+automatically after the clean shutdown and physical power cycle. A reported
+large-memory warning before UI startup remains unresolved. Camera capture,
+HDMI-disconnected operation, and post-cold-start printer communication were
+not independently verified during that observation.
+
+After restoring management access, the copies dropdown, odd-copy documents,
+and lighter startup launcher were deployed. All 92 tests passed natively on
+the Pi. The service-only launcher avoids GUI/camera imports; measured peak
+import memory decreased from 20,240 KiB to 12,468 KiB. System memory inspection
+showed over 500 MiB available with no swap use and about 30 MiB booth RSS.
+This does not identify or resolve the earlier desktop memory warning.
+With the physical LCD removed, its logical output was disabled for the current
+session and the booth was launched on HDMI. Camera auto-detection is already
+enabled, but no sensor is currently detected; model/cable verification is needed
+before a genuine capture test.
+
+The camera was subsequently identified as an official Camera Module 3 Wide.
+The official IMX708 driver and overlay are installed. An authorized temporary
+`imx708` overlay probe failed to read sensor chip ID 708 with error -5, with
+matching autofocus-controller I2C failures. The probe overlay was removed and
+`camera_auto_detect=1` was left unchanged. This is a failed detection result,
+not a completed camera setup. A powered-off cable/connector check is required
+before retesting; no real capture succeeded during that first probe.
+
+After the user flipped the ribbon, the sensor identified as `imx708_wide`,
+4608 x 2592. A controlled reboot verified normal automatic detection with
+no runtime probe overlay loaded and no permanent boot edits. However, the
+production helper still timed out waiting for image frames. A separate
+`rpicam-still` test at 1536 x 864 and 5 fps failed the same way. Both tests
+were bounded; stalled test processes were cleaned up. `vcgencmd get_throttled`
+returned `0x0`. The one-time home-network recovery unit and temporary SSH
+credentials were removed after reboot verification. Camera capture remains
+blocked on a powered-off cable/connector check or a compatible replacement
+15-pin-to-15-pin ribbon; no successful photo has been verified.
+
+Following a further powered-off reseat of the original 15-to-15 ribbon, boot
+auto-detection still succeeded but the production capture again timed out.
+The sensor-to-Unicam media links are enabled. A direct kernel V4L2 raw-frame
+test allocated buffers and started streaming, but ended with `select timeout`
+without returning a frame. Its process exit status was 0 despite the timeout;
+this is not a successful capture. The one-time home-network recovery unit
+removed itself on boot, and no capture test processes were left running.
+
+Background-process isolation was also tested. PipeWire and WirePlumber had
+camera handles open, so their services and sockets and the booth service
+were temporarily stopped. `fuser` then reported no camera owners, but the
+modern `rpicam-hello --nopreview --timeout 5000` test still failed with frontend
+timeouts under a 12-second watchdog. All previously running services were
+restored afterward. This does not support those services being the sole cause.
+
+The OS is Debian 13 Trixie with Raspberry Pi kernel 6.18.50 and the modern
+camera stack, not a legacy-camera OS. After explicit user approval, APT
+metadata was refreshed and the coordinated dependency plan rechecked.
+The update upgraded 22 packages, replaced libcamera0.7 with libcamera0.8,
+and preserved the PipeWire camera integration. Installed versions are
+rpicam-apps 1.15.0, libcamera 0.8.0+rpt20261104, and PipeWire 1.4.2-1+rpt5;
+Picamera2 remains 0.3.39. The package audit was clean. No kernel, firmware,
+or full OS upgrade was performed.
+
+Post-update verification still failed to receive a frame. The production
+Picamera2 helper timed out under a 25-second watchdog. A separate modern
+`rpicam-hello --nopreview --timeout 5000` test also produced frontend timeouts
+under a 12-second watchdog after the booth, PipeWire, and WirePlumber services
+and sockets were stopped and `fuser` reported no camera owners. Both watchdogs
+returned 124. All six previously active user services/sockets were restored.
+The updated stack still reports missing static properties for `imx708_wide`;
+that warning alone does not establish the cause. No preview frame or saved
+photo has been verified, and no print job was submitted.
+
+The first post-update 92-test run reported two landscape-layout assertion
+failures: the current desktop exposes only the logical 320 x 480 portrait LCD,
+so automatic portrait selection overrode the tests' landscape assumptions.
+The multi-size GUI checks now simulate each intended screen size during app
+construction and assert the resulting layout mode, following the existing
+automatic-display test pattern. Production display detection is unchanged.
+After that fixture correction, all 92 tests passed natively on the Pi with
+the current portrait desktop and updated camera/media packages.
+These GUI tests use synthetic captures and cannot establish camera readiness.
+
+Further isolated tests compared normal capture with the IMX708 sensor's
+built-in color-bar control. Both `rpicam-still` attempts timed out under
+12-second watchdogs without saving a JPEG. The requested test-pattern control
+was readable as 0 and 1 respectively during the attempts. This confirms the
+driver accepted the setting, not that the sensor emitted a pattern.
+
+A separate direct V4L2 color-bar stream bypassed Picamera2 and libcamera.
+The first attempt was rejected before streaming because the sensor and
+receiver Bayer formats differed after libcamera closed; that rejection is
+not evidence of a hardware fault. After explicitly matching sensor
+SRGGB10_1X10 and receiver `pRAA` at 2304 x 1296, buffer allocation, queueing,
+and STREAMON all succeeded. The stream then reported `select timeout`,
+transferring 0 of the expected 3,732,480 bytes. Its exit status was 0 despite
+the failed transfer; no raw frame was verified.
+
+During that valid direct stream, three live receiver snapshots showed
+stride 2880, detected resolution 0 x 0, and an unchanged write pointer.
+The Unicam interrupt count remained zero before, during, and after streaming.
+The actual sensor and receiver device-tree endpoints both use data lanes
+[1, 2], clock lane [0], and noncontinuous clock mode. Power status was
+`throttled=0x0`. These observations narrow the fault below the userspace
+camera applications, but cannot distinguish the ribbon, connectors, sensor
+output, Pi receiver, or kernel driver. They do not prove a defective cable.
+Normal test-pattern mode, the previous receiver format, and all six
+previously active booth/media services and sockets were restored; temporary
+raw output was removed. No print job or boot-setting change was made.
+Further discriminating tests include an independent supported OS on a spare
+SD card, or continuity/short testing of the fully disconnected ribbon.
+Passing a continuity test does not guarantee high-speed signal integrity.
+
+Another direct test explicitly selected each supported sensor mode instead
+of reusing the last libcamera configuration: 1536 x 864, 2304 x 1296, and
+4608 x 2592. Each used matching RGGB10 formats, its mode's default vertical
+blanking (2755, 1198, and 58 respectively), exposure 100, and color bars.
+All three successfully started streaming but timed out with zero raw bytes
+and zero Unicam interrupts. Expected frame sizes were 1,658,880, 3,732,480,
+and 14,929,920 bytes. Live status showed no detected image size, and the
+sensor's runtime-power state was active during each stream. Runtime-power
+state is a driver report, not a physical voltage measurement.
+The original mode, receiver format, vertical blanking 13673, exposure 66,
+test-pattern mode 0, and all six user services/sockets were restored.
+Temporary raw output was removed. Resetting mode/timing did not produce
+a frame; the kernel and physical image-data path remain unverified.
+
+A read-only kernel-update review found installed kernel 6.18.50 and candidate
+6.18.60. `raspi-firmware` is already at its repository candidate version.
+APT simulations for both the v8 meta-package and a versioned v8 image install
+require the same coordinated kernel-family plan: 7 upgrades, 8 new packages,
+and no removals, including v8/2712 images, headers, and supporting packages.
+Available space was 7.6 GiB on root and 416 MiB on the boot partition.
+No kernel packages were installed, no autoremove was run, and no reboot was
+performed. A kernel comparison needs explicit approval, a fresh plan check,
+boot-file backup, and a one-time home-Wi-Fi recovery plan before rebooting;
+otherwise the printer profile may take management access offline again.
+
+Recorded reboot test: after a real Pi reboot, NetworkManager automatically
+selected `photobooth-selphy-direct`; IPP verification passed with no gateway.
+Desktop autostart launched the user service, and the Tk event loop logged
+portrait 320 x 480 readiness on SPI-1. The test restored home Wi-Fi for SSH
+and removed its temporary boot/recovery units. This verifies reboot behavior,
+not unplug/replug behavior or HDMI-disconnected startup. All 87 tests passed
+on the Pi, including the actual guest button callback flow with mocked printer
+responses. No camera was detected; those GUI tests used synthetic captures.
 
 ## Test record
 

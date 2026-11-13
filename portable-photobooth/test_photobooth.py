@@ -3,6 +3,7 @@ import io
 import json
 import os
 import tempfile
+import time
 import tkinter as tk
 from tkinter import ttk
 import unittest
@@ -17,7 +18,7 @@ from PIL import Image, ImageChops
 
 from photobooth import (
     PhotoBooth, PiCamera, Session, lcd_geometry, place_on_lcd, show_error,
-    shutter_wav, play_shutter_sound, render_strip_footer, main,
+    shutter_wav, play_shutter_sound, render_strip_footer, submit_layout, main,
 )
 
 
@@ -187,10 +188,15 @@ class SessionTests(unittest.TestCase):
     def test_strip_count_defaults_to_one_sheet_and_rejects_unsupported_quantities(self):
         self.assertEqual(Session(3, 5, Path("unused")).strip_count, 2)
         self.assertEqual(Session(3, 5, Path("unused")).sheet_count, 1)
-        for strips in (0, 1, 3, 6):
+        for strips in (0, 9, -1, 1.5, True):
             with self.subTest(strips=strips):
-                with self.assertRaisesRegex(ValueError, "2 or 4 photo strips"):
+                with self.assertRaisesRegex(ValueError, "1 and 8 photo strips"):
                     Session(3, 5, Path("unused"), strip_count=strips)
+        for strips in range(1, 9):
+            self.assertEqual(
+                Session(3, 5, Path("unused"), strip_count=strips).sheet_count,
+                (strips + 1) // 2,
+            )
 
     def test_failed_capture_is_not_added_to_review(self):
         class BrokenCamera:
@@ -343,6 +349,8 @@ class LayoutFlowTests(unittest.TestCase):
         app.preview_ready = True
         app.shutter_sound = False
         app.sound_worker = None
+        app.print_started = False
+        app.print_worker = Mock()
         for name in ("root", "worker", "camera", "session", "status", "countdown",
                      "clear", "label", "button", "sound_warning"):
             setattr(app, name, Mock())
@@ -351,6 +359,7 @@ class LayoutFlowTests(unittest.TestCase):
         app.session.photo_count = 3
         app.session.interval = 5
         app.session.strip_count = 2
+        app.session.sheet_count = 1
         app.strip_count = Mock()
         app.strip_count.get.return_value = 4
         app.strip_text = Mock()
@@ -453,13 +462,67 @@ class LayoutFlowTests(unittest.TestCase):
         showerror.assert_not_called()
         self.assertEqual(
             [call.args[0] for call in app.button.call_args_list],
-            ["Print 2 strips (coming soon)", "Don't print"],
+            ["Print 2 strips", "Don't print"],
         )
-        self.assertEqual(app.button.call_args_list[0].kwargs["state"], "disabled")
+        self.assertNotIn("state", app.button.call_args_list[0].kwargs)
         self.assertTrue(app.active)
         self.assertTrue(app.previewing)
         app.clear.assert_not_called()
         app.countdown.pack_forget.assert_called_once()
+
+    def test_repeated_print_taps_submit_only_once_with_selected_strip_count(self):
+        app = self.make_app()
+        app.session.directory = Path("saved-session")
+        app.session.sheet_count = 2
+        app.session.strip_count = 3
+        app.print_button = Mock()
+        app.done_button = Mock()
+        app.start_print(app.session)
+        app.start_print(app.session)
+        app.print_worker.submit.assert_called_once_with(
+            submit_layout,
+            Path("saved-session/print_layout.png"), 3,
+        )
+        app.print_button.config.assert_called_once_with(state="disabled")
+        app.done_button.config.assert_called_once_with(state="disabled")
+
+    def test_print_submission_is_not_reported_as_completion(self):
+        app = self.make_app()
+        future = Future()
+        future.set_result(42)
+        app.check_print(future, app.session, None)
+        app.status.config.assert_called_once_with(text="Print job 42 submitted")
+        app.root.after.assert_called_once_with(2000, app.poll_print, app.session, 42)
+
+    def test_eight_strips_allow_time_for_all_four_sheets(self):
+        app = self.make_app()
+        app.session.sheet_count = 4
+        future = Future()
+        future.set_result(42)
+        with patch("photobooth.time.monotonic", return_value=100):
+            app.check_print(future, app.session, None)
+        self.assertEqual(app.print_deadline, 580)
+
+    def test_print_completion_enables_done_without_reenabling_print(self):
+        app = self.make_app()
+        app.done_button = Mock()
+        app.print_button = Mock()
+        future = Future()
+        future.set_result(("completed", "Complete"))
+        app.check_print(future, app.session, 42)
+        app.done_button.config.assert_called_once_with(text="Done", state="normal")
+        app.print_button.config.assert_not_called()
+
+    def test_print_failure_is_visible_and_never_resubmitted(self):
+        app = self.make_app()
+        app.done_button = Mock()
+        future = Future()
+        future.set_exception(RuntimeError("Connection lost"))
+        with patch("photobooth.show_error") as error, self.assertLogs("photobooth"):
+            app.check_print(future, app.session, None)
+        self.assertIn("Connection lost", error.call_args.args[2])
+        app.print_worker.submit.assert_not_called()
+        app.done_button.config.assert_called_once_with(text="Done", state="normal")
 
     def test_finished_session_cannot_capture_extra_photos(self):
         app = self.make_app()
@@ -647,6 +710,42 @@ class PiCameraTests(unittest.TestCase):
     "Set PHOTOBOOTH_GUI_TESTS=1 in a desktop session to test real Tk widgets.",
 )
 class DisplayLayoutTests(unittest.TestCase):
+    def test_guest_print_button_submits_selected_copies_and_reaches_done(self):
+        for strips in (1, 3, 8):
+            with self.subTest(strips=strips), tempfile.TemporaryDirectory() as output:
+                root = tk.Tk()
+                app = PhotoBooth(root, Path(output), False, portrait=True)
+                try:
+                    app.strip_count.set(strips)
+                    with patch.object(app, "request_preview"), patch.object(app, "tick"):
+                        app.start()
+                    future = Future()
+                    future.set_result(Path("print_layout.png"))
+                    app.check_layout(future, app.session)
+                    schedule = root.after
+                    with patch("photobooth.submit_layout", return_value=42) as submit, \
+                            patch("photobooth.job_status", return_value=("completed", "Complete")), \
+                            patch.object(root, "after", side_effect=lambda delay, callback, *args:
+                                         schedule(min(delay, 10), callback, *args)):
+                        app.print_button.invoke()
+                        app.start_print(app.session)
+                        deadline = time.monotonic() + 5
+                        while app.done_button.cget("text") != "Done" and time.monotonic() < deadline:
+                            root.update()
+                            time.sleep(.01)
+                    submit.assert_called_once_with(
+                        app.session.directory / "print_layout.png", strips,
+                    )
+                    self.assertEqual(app.done_button.cget("text"), "Done")
+                    self.assertEqual(str(app.print_button.cget("state")), "disabled")
+                    self.assert_layout_fits(root, 320, 480)
+                    app.done_button.invoke()
+                    self.assertFalse(app.active)
+                finally:
+                    for callback in root.tk.call("after", "info"):
+                        root.after_cancel(callback)
+                    app.close()
+
     def press(self, app, text):
         widgets = [app.frame]
         for widget in widgets:
@@ -741,10 +840,14 @@ class DisplayLayoutTests(unittest.TestCase):
             with self.subTest(portrait=portrait, compact=compact):
                 root = tk.Tk()
                 root.withdraw()
-                app = PhotoBooth(
-                    root, Path("unused"), False, compact=compact, portrait=portrait,
-                )
+                with patch.object(root, "winfo_screenwidth", return_value=width), \
+                        patch.object(root, "winfo_screenheight", return_value=height):
+                    app = PhotoBooth(
+                        root, Path("unused"), False, compact=compact, portrait=portrait,
+                    )
                 try:
+                    self.assertEqual(app.compact, compact)
+                    self.assertEqual(app.portrait, portrait)
                     app.count.set(3)
                     app.interval.set(10)
                     app.strip_count.set(4)
@@ -786,8 +889,12 @@ class DisplayLayoutTests(unittest.TestCase):
             with self.subTest(compact=compact, portrait=portrait), tempfile.TemporaryDirectory() as output:
                 root = tk.Tk()
                 root.withdraw()
-                app = PhotoBooth(root, Path(output), False, compact=compact, portrait=portrait)
+                with patch.object(root, "winfo_screenwidth", return_value=width), \
+                        patch.object(root, "winfo_screenheight", return_value=height):
+                    app = PhotoBooth(root, Path(output), False, compact=compact, portrait=portrait)
                 try:
+                    self.assertEqual(app.compact, compact)
+                    self.assertEqual(app.portrait, portrait)
                     self.assert_layout_fits(root, width, height)
                     self.assertEqual(app.strip_count.get(), 2)
                     self.assertIn("2 strips  /  1 sheet", app.summary.get())
@@ -797,20 +904,26 @@ class DisplayLayoutTests(unittest.TestCase):
                     strip_choices = []
                     for widget in widgets:
                         widgets.extend(widget.winfo_children())
-                        if isinstance(widget, tk.Radiobutton) and (
-                            str(widget.cget("variable")) == str(app.strip_count)
+                        if isinstance(widget, ttk.Combobox) and (
+                            str(widget.cget("textvariable")) == str(app.strip_count)
                         ):
                             strip_choices.append(widget)
-                    self.assertEqual([choice.cget("text") for choice in strip_choices], ["2", "4"])
-                    for strips, choice in zip((2, 4), strip_choices):
-                        choice.invoke()
-                        sheets = "1 sheet" if strips == 2 else "2 sheets"
+                    self.assertEqual(len(strip_choices), 1)
+                    choice = strip_choices[0]
+                    self.assertEqual(tuple(map(int, choice.cget("values"))), tuple(range(1, 9)))
+                    self.assertEqual(str(choice.cget("state")), "readonly")
+                    for strips in range(1, 9):
+                        choice.current(strips - 1)
+                        sheets = (strips + 1) // 2
                         self.assertEqual(
                             app.summary.get(),
-                            f"3 photos  /  10 seconds between shots\n{strips} strips  /  {sheets}",
+                            f"3 photos  /  10 seconds between shots\n"
+                            f"{strips} {'strip' if strips == 1 else 'strips'}  /  "
+                            f"{sheets} {'sheet' if sheets == 1 else 'sheets'}",
                         )
                         self.assertGreaterEqual(choice.winfo_reqheight(), 40)
                         self.assert_layout_fits(root, width, height)
+                    choice.current(3)
                     with patch.object(app, "request_preview"), patch.object(app, "tick"):
                         app.start()
                     app.status.config(text="Get situated! Photo 1 of 4")
@@ -838,11 +951,11 @@ class DisplayLayoutTests(unittest.TestCase):
                     self.assertEqual(
                         [button.cget("text") for button in choices],
                         [
-                            "Print 4 strips (soon)" if compact else "Print 4 strips (coming soon)",
+                            "Print 4 strips",
                             "Don't print",
                         ],
                     )
-                    self.assertEqual(str(choices[0].cget("state")), "disabled")
+                    self.assertEqual(str(choices[0].cget("state")), "normal")
                     frame = Future()
                     frame.set_result(Image.new("RGB", (640, 360), "blue"))
                     app.check_preview(frame, session)

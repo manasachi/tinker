@@ -63,12 +63,14 @@ The guest flow has no saved-photo Review or Retake screen. It keeps the live
 camera view through the final Print / Don't print choices. The separate
 camera-free image tester still has navigation for checking supplied pictures.
 
-The options include **2 or 4 photo strips**, defaulting to 2. Each printed
-sheet contains two identical strips: 2 strips need 1 sheet, and 4 strips need
-2 copies of the same sheet. Cut the sheets after printing. This quantity is
+The copies dropdown offers **1 through 8 individual photo strips**, defaulting
+to 2. Each sheet holds two identical strips. Odd quantities leave the right
+half of the final sheet blank: 3 strips use 2 sheets, and 8 strips use 4 sheets.
+The SELPHY still consumes a full sheet and ribbon pass for a half-blank sheet.
+Cut the sheets after printing. This quantity is
 separate from the 3/4 photos on each strip and is retained in the session.
-The summary shows both strip and sheet quantities; the disabled Print button
-also shows the selected strip count. Actual printer integration is still pending.
+The summary and Print button show the selected strip count. Print sends one
+color job to the direct SELPHY queue, with the selected strip quantity.
 
 ### Optional text at the bottom of the strip
 
@@ -109,7 +111,7 @@ Install these on the Pi; Picamera2 is not needed for this test:
 
 ```sh
 sudo apt update
-sudo apt install python3-tk python3-pil python3-pil.imagetk
+sudo apt install python3-tk python3-pil python3-pil.imagetk python3-cups
 cd ~/portable-photobooth
 python3 display_test.py
 ```
@@ -264,7 +266,7 @@ stays open for the entire session; its Submit button starts the capture program,
 not another copy of the interface.
 
 1. The LCD asks for **3 or 4 photos**, a **5 or 10 second interval between
-   photos**, and **2 or 4 printed strips**.
+   photos**, and **1 to 8 printed strips** from a dropdown.
 2. The user taps **Submit** once. Lock the choices and disable Submit so another
    session cannot start while one is running.
 3. Show **Get ready!** with a **15-second positioning countdown**, regardless of
@@ -277,7 +279,7 @@ not another copy of the interface.
    are needed.
 6. Compose a print image with two identical strips side by side. Keep the
    camera's live view on the LCD; do not switch to saved-photo review.
-7. Offer **Print (coming soon)**, disabled until printing is configured, and
+7. Offer **Print**, using the saved SELPHY Direct Connection queue, and
    **Don't print**. There is no Review, Previous/Next, or Retake option.
 8. **Don't print** ends the session and returns to the choices without deleting
    saved photos. It does not replace or retake any photo in that session.
@@ -288,7 +290,7 @@ Example: with 3 photos and a 5-second interval, the sequence is:
 Submit -> 15-second positioning countdown -> capture/save photo 1
        -> 5-second countdown -> capture/save photo 2
        -> 5-second countdown -> capture/save photo 3
-       -> live view + Print (disabled) / Don't print
+       -> live view + Print / Don't print
 ```
 
 Capture and save time is additional to the countdowns. A capture failure must
@@ -338,9 +340,9 @@ single program. The planned filenames above do not exist yet.
 - A cream-and-green options screen with large photo/timer/strip-count choices, a live
   selection summary, and a Start photo session button. The palette uses
   `#386641`, `#6a994e`, `#a7c957`, `#f2e8cf`, and `#bc4749`.
-- Choose 3 or 4 photos, a 5 or 10 second delay between photos, and 2 or 4 strips.
-  The strip quantity is separate from the photo count; 4 strips require
-  2 copies of the same two-strip print sheet, not extra camera captures.
+- Choose 3 or 4 photos, a 5 or 10 second delay between photos, and 1 to 8 strips.
+  The strip quantity is separate from the photo count and never requires extra
+  camera captures. Odd quantities print one strip on the last sheet.
 - Press Start once. A fixed 15-second positioning countdown runs before photo 1.
   Only subsequent photos use the chosen 5/10-second delay, with no extra taps.
 - The LCD shows a live camera view during positioning and between photos, with
@@ -350,7 +352,8 @@ single program. The planned filenames above do not exist yet.
   the same sheet size.
 - Keep showing the live camera view after capture, alongside Print / Don't print.
   No saved-photo review or retake is offered to guests.
-- Print is visible but disabled. **Nothing is sent to a printer yet.**
+- Print checks the direct connection and printer readiness, then submits the
+  selected sheet quantity in the background. Repeated taps cannot submit again.
 - Don't print returns to the choices without deleting saved photos.
 - Optional shutter click after each successful capture; off by default.
 
@@ -499,7 +502,7 @@ with the Pi powered off, then boot and verify it:
 ```sh
 rpicam-still -o camera-test.jpg
 sudo apt update
-sudo apt install python3-picamera2 python3-pil python3-pil.imagetk python3-tk
+sudo apt install python3-picamera2 python3-pil python3-pil.imagetk python3-tk python3-cups
 ```
 
 Optional strip text requires Pillow 10.1 or newer for its built-in scalable
@@ -533,7 +536,7 @@ cannot access Picamera2 concurrently; Tk image updates happen on the UI thread.
 Failed previews/captures display an error; completed photos remain on disk.
 Photos are not automatically deleted, so monitor available storage.
 
-## Print layout and future printing
+## Print layout and printing
 
 Each completed session saves its original JPEGs plus `print_layout.png`: a
 **1,182 x 1,748 pixel RGB image at 300 DPI**, sized for SELPHY's **100 x 148 mm**
@@ -574,9 +577,225 @@ interface. Some portable printers use vendor-only apps rather than a standard
 Linux print queue. Submit the composed sheet as **one print job**, not each photo
 as a separate job. Paper dimensions, scaling, borderless overscan, margins, and
 cutting behavior must be confirmed for the printer. DPI metadata alone does not
-force physical print dimensions. Print remains disabled: no jobs are submitted.
+force physical print dimensions.
 
-### Canon SELPHY CP1500: first wireless test
+The guest Print button uses `printing.py` and `SELPHY_CP1500_Direct`. It
+requires the saved direct Wi-Fi profile, a direct route, a ready CP1500, and
+no outstanding CUPS jobs. It discovers the current printer address from DHCP;
+if it changes, the queue is refreshed using the host user's `lpadmin` privileges.
+The Pi's normal user must belong to `lpadmin`.
+
+Printing runs separately from camera preview. One tap submits one color job:
+even quantities reuse the two-strip PNG with 1 to 4 sheet copies. Odd quantities
+generate a 300-DPI, high-quality multipage `print_job.pdf`, with complete pairs
+first and a single left-hand strip on the last page. That PDF is submitted once,
+with copies set to 1, so it cannot duplicate the last strip. The unused right
+half is white. The original PNG, strip dimensions, borders, and photos are unchanged.
+The button then stays disabled.
+`print-job.json` records submission intent before contacting CUPS and the job ID
+after acceptance, preventing resubmission of that session even after restart.
+An uncertain reply is not automatically retried. Never remove this record to
+retry without first inspecting CUPS and the physical printer.
+
+The screen distinguishes submission from CUPS-reported completion and then
+offers **Done**. A canceled, aborted, stopped, or unmonitorable job shows an error.
+The monitoring limit is at least four minutes, or two minutes per sheet for
+larger orders; afterward, it warns that the job may print later.
+An already accepted CUPS job can continue after closing the app; do not create
+a replacement until it has been resolved. Photos are never deleted by printing.
+CUPS completion is not a substitute for inspecting the physical sheet.
+The 1-to-8 dropdown and odd-copy output are deployed to the Pi. All 92 native
+Pi tests passed, including real Tk widget checks and decoding generated PDF
+image streams. The dropdown met the 40-pixel minimum touch target after a
+Pi-specific padding correction. Odd-copy printing has not been physically tested.
+
+### Automatic portrait LCD startup
+
+On the Pi, use Raspberry Pi OS **Desktop Autologin** (already configured on the
+current Pi). With the desktop running:
+
+```sh
+cd ~/portable-photobooth
+python3 booth_startup.py --install
+python3 booth_startup.py --start-service
+```
+
+This installs only the host user's `photobooth.desktop` autostart entry and
+`photobooth.service` user unit; other desktop entries are preserved. On each
+desktop login, it imports the display environment, waits up to 90 seconds for
+the portrait SPI LCD, and opens `photobooth.py --lcd`. The service restarts on
+unexpected failure, limited to three starts in ten minutes. Display queries
+have a ten-second timeout. The lightweight service launcher does not import
+Tk, Pillow, or the camera stack; measured peak import memory on the Pi fell
+from 20,240 KiB to 12,468 KiB. It does not configure desktop
+autologin, Wi-Fi credentials, or the camera.
+
+```sh
+systemctl --user status photobooth.service
+sudo journalctl -b _SYSTEMD_USER_UNIT=photobooth.service --no-pager
+systemctl --user stop photobooth.service
+```
+
+The `Photobooth UI ready` log is emitted from the actual Tk event loop with
+the selected LCD geometry. To disable future autostart, remove only
+`~/.config/autostart/photobooth.desktop`; stop the service as above. Escape
+also closes the running app. Stop the service before manually launching another
+booth instance for troubleshooting.
+
+With the GPIO LCD physically removed, its boot overlay can still advertise
+`SPI-1`. During the current HDMI-only troubleshooting session, the normal
+LCD service was stopped, `SPI-1` was disabled at runtime, and a temporary
+`photobooth-hdmi-test.service` displays the booth on HDMI. Persistent portrait
+LCD configuration is unchanged. Shut down and unplug before reconnecting the
+GPIO shield or camera ribbon; normal LCD startup returns on reboot.
+
+### Router-free operation: SELPHY Direct Connection
+
+The Pi can join the SELPHY's own Wi-Fi network. Neither device needs a
+home/venue router or internet access. This is a local connection between the
+two devices, not printing with both radios disconnected.
+
+`portable_setup.py` provides a one-time saved NetworkManager profile and a
+router-free connection check. It learns the printer's address from the active
+direct-network DHCP lease, not from a home-network IP. The physical direct
+connection test found that `.local` name resolution did not work in this mode,
+although the printer answered IPP at its direct address. It does not change
+the strip borders or automatically
+submit a print.
+
+#### One-time setup
+
+1. On the SELPHY, enable **Direct Connection** in its Wi-Fi settings. Use the
+   network name and password displayed on its screen, not your home Wi-Fi.
+2. From a terminal **on the Pi**, run:
+
+   ```sh
+   cd ~/portable-photobooth
+   python3 portable_setup.py connect --ssid "SSID FROM PRINTER SCREEN"
+   ```
+
+   Enter the printer's password only at the local NetworkManager prompt. It
+   is not stored in this repository or passed as a command-line argument.
+   NetworkManager stores the connection for subsequent automatic reconnection.
+   It creates a separate `SELPHY_CP1500_Direct` queue. The original
+   home-network `SELPHY_CP1500` queue is left unchanged. The direct address
+   is discovered from DHCP each time; no fixed address needs to be entered.
+3. This switches `wlan0` away from its current network. **Do not run it through
+   your only SSH connection:** that connection will disconnect mid-setup.
+   Use a local Pi terminal for this initial step, or a separate wired management
+   connection. NetworkManager permissions are required; if authorization is
+   denied, run this one-time command locally with `sudo`.
+4. The command verifies the active direct profile, finds the printer's address, checks
+   a direct Wi-Fi route without a routing gateway, verifies the CP1500 identity
+   and readiness over IPP, and configures the driverless queue.
+
+The profile is named `photobooth-selphy-direct`, with autoconnect enabled and
+priority 100. Existing network profiles are not deleted or disabled. When the
+printer network is absent, NetworkManager may reconnect to another saved
+network; the check below will explicitly reject that as a router-free test.
+The direct connection is not installed as an internet default route.
+
+#### At an event, or when testing without your home Wi-Fi
+
+1. Power on the SELPHY in Direct Connection mode, then power on the Pi.
+2. Check the connection without spending any paper:
+
+   ```sh
+   python3 portable_setup.py check
+   ```
+
+3. Only when ready to consume **one sheet**, explicitly request a test:
+
+   ```sh
+   python3 portable_setup.py check --print-test
+   ```
+
+   This verifies the direct connection again, rejects an already-pending job,
+   and submits one monochrome circle sheet with **no bottom text**. It does not
+   automatically retry a failed submission. A reported job ID means submitted,
+   not physically printed; inspect `lpstat -p SELPHY_CP1500_Direct -l` and the output.
+4. Test with your home router switched off, then repeat after powering both
+   devices off and on. No laptop or external monitor should be needed to
+   reconnect once the saved profile and printer mode are verified. The initial
+   CLI setup described above needs a terminal once; installed automatic startup
+   and the guest Print button do not require one at the event.
+
+The live test connected the Pi to the SELPHY network with address `192.168.0.2`
+and no default route, and verified the CP1500's IPP endpoint at `192.168.0.1`.
+The printer reported idle and accepting jobs.
+The updated `portable_setup.py check` also passed on that live direct link,
+and `SELPHY_CP1500_Direct` was created successfully with the advertised
+postcard/borderless sizes. After guest printing and startup integration, all
+87 software tests passed on the Pi, including native GUI checks and the guest
+button's asynchronous submission-to-completion flow.
+A subsequent diagnostic used the same submission function as the guest button,
+over the direct link with no default route: `SELPHY_CP1500_Direct-4` reported
+successful completion of one monochrome sheet with no footer. A real Pi reboot
+then automatically selected the direct profile, reached the printer without a
+gateway, and started the app on the portrait LCD. The Tk event loop logged
+`Photobooth UI ready: (320, 480, 1920, 0)` in the new boot. Temporary boot-test
+and recovery units were removed afterward; normal desktop autostart remains.
+The user subsequently confirmed the physical no-footer sheet printed and that
+the booth options appeared automatically after a clean shutdown and physical
+power cycle. HDMI-disconnected operation and printer communication immediately
+after that cold start were not independently observed remotely.
+A large-memory warning appeared before the UI; its cause remains under
+investigation, not a resolved issue. Live inspection found about 30 MiB RSS
+for the booth, over 500 MiB available RAM, and no swap use. Startup overhead
+was reduced as described above, without hiding memory warnings or removing
+desktop/network controls. The camera is an official Camera Module 3 Wide.
+Initially its driver could not read the sensor chip ID. After the user changed
+the ribbon orientation, the IMX708 Wide sensor was detected. A clean reboot
+confirmed automatic detection at 4608 x 2592 with `camera_auto_detect=1`,
+without any temporary runtime overlay or permanent boot-setting change.
+
+Capture is still blocked: the production camera helper and an independent
+`rpicam-still` test both timed out waiting for image frames, including a low-rate
+1536 x 864 test. The tests were bounded and no stalled capture processes were
+left running. Power status reported `throttled=0x0`. Sensor identification
+alone is not a successful photo test. Shut down and unplug before checking
+both ribbon latches and the CSI CAMERA connector, or trying another compatible
+15-pin-to-15-pin cable. Use one ribbon, not two cables in series. Detection and
+actual image capture must be retested afterward.
+An approved coordinated camera/media update subsequently installed
+rpicam-apps 1.15.0 and libcamera 0.8.0+rpt20261104 while preserving PipeWire
+camera integration. The package audit was clean; the kernel and firmware
+were not upgraded. Actual capture still timed out on the updated stack,
+including an isolated modern `rpicam-hello` test with no competing camera
+owners. All previously active media and booth services were restored.
+The camera is detected but is not yet verified functional; a known-good
+compatible ribbon or hardware cross-test is the next useful discriminator.
+Additional sensor color-bar tests also failed. A direct kernel V4L2 stream,
+with matching sensor/receiver formats, successfully started but returned
+zero image bytes, zero camera interrupts, and no detected image size during
+streaming. This bypasses Picamera2/libcamera and narrows the fault below those
+applications; it still does not uniquely identify a bad ribbon. The camera
+output, connectors, Pi receiver, and kernel driver remain possibilities.
+Normal sensor settings and booth/media services were restored. Without a
+replacement cable, an independent OS on a spare SD card or an electrical
+open/short test of the fully disconnected ribbon can provide more evidence.
+Passing continuity alone does not establish high-speed cable integrity.
+Explicit direct-stream tests of all three sensor modes, with default timing
+and fixed exposure, also transferred zero image bytes. A newer kernel
+(6.18.60 versus installed 6.18.50) is available as a further software-side
+comparison; it has only been simulated, not installed. Firmware is already
+at its repository candidate version. A kernel test requires separate
+approval and a boot/network recovery plan; it is not a confirmed fix.
+The tests restore home Wi-Fi solely for management and retain the saved direct
+profile. At an event, power on the printer in Direct Connection mode before
+the Pi; no home/venue router is needed.
+
+To return to normal Wi-Fi from the Pi terminal, use:
+
+```sh
+nmcli connection down photobooth-selphy-direct
+nmcli connection up "YOUR SAVED HOME PROFILE"
+```
+
+Return the printer to its router connection separately. Do not put network
+passwords in scripts or commits.
+
+### Canon SELPHY CP1500: first wireless test through a router
 
 The current Pi has a driverless queue named `SELPHY_CP1500`, connected to
 `ipp://CP1500f66dc2.local:631/ipp/print`. On November 13, 2026, CUPS reported
@@ -594,8 +813,8 @@ has not been physically printed yet.
 The test used one copy with `PageSize=Postcard.Borderless`, `print-scaling=fit`,
 `orientation-requested=3`, `sides=one-sided`, and `ColorModel=RGB`.
 The generated sheet is in the Pi's `~/Pictures/photobooth-printer-tests/`
-folder. No personal photos were used. The guest Print button remains disabled;
-this establishes a working test queue, not integrated app printing.
+folder. No personal photos were used. Those original home-network tests
+established the queue; guest printing now uses the separate direct queue.
 
 1. On the printer, use its Wi-Fi settings to connect **via a wireless router**
    to the same network as the Pi. Avoid guest networks with client isolation.
@@ -644,7 +863,7 @@ must be verified separately; creating the PNG is not proof of a successful print
 
 For step-by-step hardware and software checks, follow the
 [phased testing guide](./TESTING.md). It separates current functionality from
-future split-program and printer tests.
+future split-program tests and physical printing acceptance.
 
 ```sh
 python3 -m unittest -v
@@ -665,9 +884,8 @@ Inspired by overtinker's portable photobooth, with different controls and flow.
    15-second positioning countdown, live view, and background camera preparation.
 3. Test the complete 3/4-photo flow, countdowns, saved files, print choices, and recovery
    from camera errors on the Pi.
-4. Confirm the printer model and paper dimensions, test the composed strip
-   layout on paper, and implement wireless printing. Keep Print disabled until
-   this works.
+4. Complete physical output inspection and cold-boot acceptance for the
+   integrated direct-wireless printing and automatic LCD startup.
 5. Build a ventilated case with a handle.
 
 A physical GPIO start/confirm/reject button is a possible later addition, not

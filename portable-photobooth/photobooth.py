@@ -9,6 +9,7 @@ import json
 import logging
 import math
 from pathlib import Path
+import time
 import struct
 import subprocess
 import tkinter as tk
@@ -16,6 +17,8 @@ from tkinter import messagebox, ttk
 from typing import Optional, Protocol
 from uuid import uuid4
 import wave
+
+from printing import job_status, submit_layout, validate_strip_count
 
 
 FOREST = "#386641"
@@ -100,7 +103,7 @@ def play_shutter_sound() -> None:
 
 def lcd_geometry() -> tuple[int, int, int, int]:
     result = subprocess.run(
-        ["wlr-randr", "--json"], check=True, capture_output=True, text=True,
+        ["wlr-randr", "--json"], check=True, capture_output=True, text=True, timeout=10,
     )
     output = next(
         (output for output in json.loads(result.stdout) if output["name"] == "SPI-1"),
@@ -175,13 +178,12 @@ class Session:
             raise ValueError("Choose either 3 or 4 photos.")
         if self.interval not in (5, 10):
             raise ValueError("Choose either a 5 or 10 second timer.")
-        if self.strip_count not in (2, 4):
-            raise ValueError("Choose either 2 or 4 photo strips.")
+        validate_strip_count(self.strip_count)
         self.strip_text = self.strip_text.strip()
 
     @property
     def sheet_count(self) -> int:
-        return self.strip_count // 2
+        return (self.strip_count + 1) // 2
 
     @property
     def photo_area_height(self) -> int:
@@ -303,6 +305,8 @@ class PhotoBooth:
         )
         self.camera = PiCamera((480, 270) if self.compact else (640, 360))
         self.worker = ThreadPoolExecutor(max_workers=1)
+        self.print_worker = ThreadPoolExecutor(max_workers=1)
+        self.print_started = False
         self.shutter_sound = shutter_sound
         self.sound_worker = ThreadPoolExecutor(max_workers=1) if shutter_sound else None
         self.session = None
@@ -357,6 +361,7 @@ class PhotoBooth:
         return button
 
     def show_options(self, *, preserve_choices: bool = False) -> None:
+        self.print_started = False
         count = self.count.get() if preserve_choices else 4
         interval = self.interval.get() if preserve_choices else 5
         strips = self.strip_count.get() if preserve_choices else 2
@@ -376,7 +381,7 @@ class PhotoBooth:
         for column, (title, hint, variable, choices) in enumerate((
             ("01  THE PHOTOS", "How many photos?", self.count, (3, 4)),
             ("02  THE PACE", "Seconds between photos", self.interval, (5, 10)),
-            ("03  THE COPIES", "How many strips?", self.strip_count, (2, 4)),
+            ("03  THE COPIES", "How many strips?", self.strip_count, tuple(range(1, 9))),
         )):
             card = tk.Frame(
                 cards, bg=CREAM, padx=6 if self.compact else 12,
@@ -399,6 +404,17 @@ class PhotoBooth:
             )
             row = tk.Frame(card, bg=CREAM)
             row.pack(fill="x")
+            if variable is self.strip_count:
+                ttk.Style(self.root).configure(
+                    "Copies.TCombobox", padding=(6, 10), arrowsize=24,
+                )
+                self.root.option_add("*TCombobox*Listbox.font", self.font(20, 24))
+                ttk.Combobox(
+                    row, textvariable=variable, values=choices, state="readonly",
+                    height=8, width=6, font=self.font(17, 17, bold=True),
+                    style="Copies.TCombobox",
+                ).pack(fill="x", padx=3)
+                continue
             for value in choices:
                 choice = tk.Radiobutton(
                     row, text=str(value),
@@ -544,10 +560,11 @@ class PhotoBooth:
 
     def update_summary(self, *_args) -> None:
         strips = self.strip_count.get()
-        sheets = strips // 2
+        sheets = (strips + 1) // 2
         self.summary.set(
             f"{self.count.get()} photos  /  {self.interval.get()} seconds between shots\n"
-            f"{strips} strips  /  {sheets} {'sheet' if sheets == 1 else 'sheets'}"
+            f"{strips} {'strip' if strips == 1 else 'strips'}  /  "
+            f"{sheets} {'sheet' if sheets == 1 else 'sheets'}"
         )
 
     def start(self) -> None:
@@ -612,6 +629,11 @@ class PhotoBooth:
             self.image = ImageTk.PhotoImage(frame)
             self.preview_label.config(image=self.image, text="")
         except Exception as error:
+            if self.print_started:
+                self.previewing = False
+                logging.getLogger(__name__).exception("Preview failed while printing")
+                self.preview_label.config(image="", text="Camera preview unavailable")
+                return
             self.active = False
             self.previewing = False
             show_error(
@@ -708,15 +730,74 @@ class PhotoBooth:
                 f"Could not prepare the photo strips:\n{error}\n\n"
                 f"Your original photos remain in:\n{session.directory}",
             )
+            self.status.config(text="Layout failed; photos saved")
+            self.button("Don't print", self.show_options)
+            return
         if not self.is_active(session):
             return
         self.status.config(text="Photos saved")
         self.countdown.pack_forget()
-        availability = "soon" if self.compact else "coming soon"
-        self.button(
-            f"Print {session.strip_count} strips ({availability})", None, state="disabled",
+        self.print_started = False
+        self.print_button = self.button(
+            f"Print {session.strip_count} {'strip' if session.strip_count == 1 else 'strips'}",
+            lambda: self.start_print(session),
         )
-        self.button("Don't print", self.show_options)
+        self.done_button = self.button("Don't print", self.show_options)
+
+    def start_print(self, session: Session) -> None:
+        if not self.is_active(session) or self.print_started:
+            return
+        self.print_started = True
+        self.print_button.config(state="disabled")
+        self.done_button.config(state="disabled")
+        self.status.config(text="Checking printer...")
+        future = self.print_worker.submit(
+            submit_layout, session.directory / "print_layout.png", session.strip_count,
+        )
+        self.root.after(100, self.check_print, future, session, None)
+
+    def check_print(self, future, session: Session, job: Optional[int]) -> None:
+        if not self.is_active(session):
+            return
+        if not future.done():
+            self.root.after(100, self.check_print, future, session, job)
+            return
+        try:
+            result = future.result()
+            if job is None:
+                job = result
+                self.print_deadline = time.monotonic() + max(240, 120 * session.sheet_count)
+                self.status.config(text=f"Print job {job} submitted")
+            else:
+                state, detail = result
+                if state == "failed":
+                    raise RuntimeError(detail)
+                if state == "completed":
+                    self.status.config(text="CUPS reports print complete")
+                    self.done_button.config(text="Done", state="normal")
+                    return
+                if time.monotonic() >= self.print_deadline:
+                    raise RuntimeError(
+                        f"Job {job} is still pending. It may print later. "
+                        "Check the printer before submitting another session."
+                    )
+                self.status.config(text=f"Job {job}: printing / waiting")
+        except Exception as error:
+            logging.getLogger(__name__).exception("Print submission or monitoring failed")
+            self.status.config(text="Check printer; photos saved")
+            self.done_button.config(text="Done", state="normal")
+            show_error(
+                self.root, "Printing needs attention",
+                f"{error}\n\nDo not tap Print again: a job may already exist. "
+                f"Your photos remain in:\n{session.directory}",
+            )
+            return
+        self.root.after(2000, self.poll_print, session, job)
+
+    def poll_print(self, session: Session, job: int) -> None:
+        if self.is_active(session):
+            future = self.print_worker.submit(job_status, job)
+            self.root.after(100, self.check_print, future, session, job)
 
     def close(self) -> None:
         self.closed = True
@@ -724,6 +805,7 @@ class PhotoBooth:
         self.previewing = False
         cleanup = self.worker.submit(self.camera.close)
         self.worker.shutdown(wait=False)
+        self.print_worker.shutdown(wait=False, cancel_futures=True)
         if self.sound_worker is not None:
             self.sound_worker.shutdown(wait=False, cancel_futures=True)
         self.root.destroy()
@@ -734,6 +816,7 @@ class PhotoBooth:
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fullscreen", action="store_true")
     parser.add_argument(
@@ -775,7 +858,8 @@ def main() -> None:
             parser.error(f"Cannot use strip text: {error}")
     try:
         geometry = lcd_geometry() if args.lcd else None
-    except (OSError, subprocess.CalledProcessError, ValueError, KeyError) as error:
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired,
+            ValueError, KeyError) as error:
         parser.error(f"Cannot open the LCD: {error}")
     root = tk.Tk()
     app = PhotoBooth(
@@ -788,6 +872,7 @@ def main() -> None:
     if geometry is not None:
         place_on_lcd(root, geometry)
         root.bind("<Escape>", lambda event: app.close())
+    root.after_idle(logging.getLogger(__name__).info, "Photobooth UI ready: %s", geometry)
     root.mainloop()
 
 
