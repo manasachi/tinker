@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import tkinter as tk
+from tkinter import ttk
 import unittest
 from concurrent.futures import Future
 from types import SimpleNamespace
@@ -16,8 +17,54 @@ from PIL import Image, ImageChops
 
 from photobooth import (
     PhotoBooth, PiCamera, Session, lcd_geometry, place_on_lcd, show_error,
-    shutter_wav, play_shutter_sound,
+    shutter_wav, play_shutter_sound, render_strip_footer, main,
 )
+
+
+class StripFooterTests(unittest.TestCase):
+    def test_text_wraps_and_fits_inside_the_footer_margins(self):
+        for text in (
+            "Happy Birthday, Sam!",
+            "Thanks for celebrating with us! " * 4,
+            "Happy Birthday\nNovember 2026",
+        ):
+            with self.subTest(text=text):
+                footer = render_strip_footer(text)
+                self.assertEqual(footer.size, (600, 300))
+                bounds = ImageChops.difference(
+                    footer, Image.new("RGB", footer.size, "white"),
+                ).getbbox()
+                self.assertIsNotNone(bounds)
+                left, top, right, bottom = bounds
+                self.assertGreaterEqual(left, 30)
+                self.assertGreaterEqual(top, 30)
+                self.assertLessEqual(right, 570)
+                self.assertLessEqual(bottom, 270)
+
+    def test_text_that_cannot_fit_is_rejected_without_truncation(self):
+        for text in ("W" * 100, "Party\n" * 30):
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(ValueError, "too long"):
+                    render_strip_footer(text)
+
+    def test_older_pillow_reports_an_actionable_error(self):
+        with patch("PIL.ImageFont.load_default", side_effect=TypeError("size")):
+            with self.assertRaisesRegex(RuntimeError, "Pillow 10.1"):
+                render_strip_footer("Party")
+
+    def test_host_can_supply_initial_text_before_launch(self):
+        with patch.object(sys, "argv", ["photobooth.py", "--strip-text", "Party night"]), \
+                patch("photobooth.tk.Tk"), patch("photobooth.PhotoBooth") as booth:
+            main()
+        self.assertEqual(booth.call_args.args[-1], "Party night")
+
+    def test_invalid_host_text_is_rejected_before_opening_gui(self):
+        with patch.object(sys, "argv", ["photobooth.py", "--strip-text", "W" * 100]), \
+                patch("photobooth.tk.Tk") as root, patch("sys.stderr", new_callable=io.StringIO):
+            with self.assertRaises(SystemExit) as error:
+                main()
+        self.assertEqual(error.exception.code, 2)
+        root.assert_not_called()
 
 
 class ShutterSoundTests(unittest.TestCase):
@@ -205,6 +252,42 @@ class SessionTests(unittest.TestCase):
                 session.prepare_print_layout()
             self.assertFalse((session.directory / "print_layout.png").exists())
 
+    def test_message_reserves_exactly_one_sixth_and_blank_text_uses_full_height(self):
+        colors = ("red", "green", "blue", "yellow")
+        for count in (3, 4):
+            for text in ("", " \t\n ", "Happy Birthday, Sam!"):
+                with self.subTest(count=count, text=text), tempfile.TemporaryDirectory() as output:
+                    session = Session(count, 5, Path(output), strip_text=text)
+                    for index in range(count):
+                        path = Path(output) / f"photo_{index}.jpg"
+                        Image.new("RGB", (800, 450), colors[index]).save(path)
+                        session.photos.append(path)
+                    originals = [path.read_bytes() for path in session.photos]
+                    with Image.open(session.prepare_print_layout()) as sheet:
+                        self.assertEqual(sheet.size, (1200, 1800))
+                        self.assertAlmostEqual(sheet.info["dpi"][0], 300, places=1)
+                        self.assertIsNone(ImageChops.difference(
+                            sheet.crop((0, 0, 600, 1800)),
+                            sheet.crop((600, 0, 1200, 1800)),
+                        ).getbbox())
+                        photo_area_height = 1500 if text.strip() else 1800
+                        slot_height = (photo_area_height - 60 - 30 * (count - 1)) // count
+                        for index, path in enumerate(session.photos):
+                            with Image.open(path) as original:
+                                color = original.getpixel((0, 0))
+                            y = 30 + index * (slot_height + 30) + slot_height // 2
+                            self.assertEqual(sheet.getpixel((300, y)), color)
+                        if text.strip():
+                            self.assertIsNone(ImageChops.difference(
+                                sheet.crop((0, 1500, 600, 1800)),
+                                render_strip_footer(text.strip()),
+                            ).getbbox())
+                            self.assertEqual(sheet.getpixel((300, 1499)), (255, 255, 255))
+                        else:
+                            self.assertEqual(sheet.getpixel((300, 1700)), color)
+                            self.assertEqual(session.strip_text, "")
+                    self.assertEqual([path.read_bytes() for path in session.photos], originals)
+
     def test_print_layout_reports_unreadable_photo(self):
         with tempfile.TemporaryDirectory() as directory:
             session = Session(3, 5, Path(directory))
@@ -254,6 +337,8 @@ class LayoutFlowTests(unittest.TestCase):
         app.session.strip_count = 2
         app.strip_count = Mock()
         app.strip_count.get.return_value = 4
+        app.strip_text = Mock()
+        app.strip_text.get.return_value = "Party night"
         return app
 
     def test_start_uses_fixed_positioning_countdown_for_either_interval(self):
@@ -276,6 +361,7 @@ class LayoutFlowTests(unittest.TestCase):
                 self.assertEqual(app.session.interval, interval)
                 self.assertEqual(app.session.strip_count, 4)
                 self.assertEqual(app.session.sheet_count, 2)
+                self.assertEqual(app.session.strip_text, "Party night")
 
     def test_first_capture_waits_fifteen_seconds_then_uses_selected_interval(self):
         for count in (3, 4):
@@ -545,6 +631,15 @@ class PiCameraTests(unittest.TestCase):
     "Set PHOTOBOOTH_GUI_TESTS=1 in a desktop session to test real Tk widgets.",
 )
 class DisplayLayoutTests(unittest.TestCase):
+    def press(self, app, text):
+        widgets = [app.frame]
+        for widget in widgets:
+            widgets.extend(widget.winfo_children())
+            if isinstance(widget, (tk.Button, ttk.Button)) and widget.cget("text") == text:
+                widget.invoke()
+                return
+        self.fail(f"Button not found: {text}")
+
     def assert_layout_fits(self, root, width, height):
         root.update_idletasks()
         self.assertLessEqual(root.winfo_reqwidth(), width)
@@ -574,6 +669,7 @@ class DisplayLayoutTests(unittest.TestCase):
                 app.count.set(count)
                 app.interval.set(interval)
                 app.strip_count.set(4)
+                app.strip_text.set("Party night")
                 schedule = root.after
                 result = {"finished": False, "first_frame": None}
 
@@ -613,11 +709,58 @@ class DisplayLayoutTests(unittest.TestCase):
                     self.assertEqual(len(app.session.photos), count)
                     self.assertEqual(app.session.strip_count, 4)
                     self.assertEqual(app.session.sheet_count, 2)
+                    self.assertEqual(app.session.strip_text, "Party night")
+                    self.assertEqual(app.strip_text.get(), "Party night")
                     self.assertTrue(all(path.is_file() for path in app.session.photos))
                     self.assertTrue((app.session.directory / "print_layout.png").is_file())
                 finally:
                     if not app.closed:
                         finish()
+
+    def test_touch_text_editor_saves_clears_cancels_and_preserves_choices(self):
+        for compact, portrait, width, height in (
+            (True, False, 480, 320), (False, False, 800, 480),
+            (True, True, 320, 480),
+        ):
+            with self.subTest(portrait=portrait, compact=compact):
+                root = tk.Tk()
+                root.withdraw()
+                app = PhotoBooth(
+                    root, Path("unused"), False, compact=compact, portrait=portrait,
+                )
+                try:
+                    app.count.set(3)
+                    app.interval.set(10)
+                    app.strip_count.set(4)
+                    self.press(app, "Strip text: off")
+                    self.assert_layout_fits(root, width, height)
+                    for title in ("H", "Aa", "i", "Space", "123", "2", "0", "2", "6", "!", "Back"):
+                        self.press(app, title)
+                    self.assertEqual(app.text_entry.get("1.0", "end-1c"), "Hi 2026")
+                    self.press(app, "!")
+                    self.press(app, "Save")
+                    self.assertEqual(app.strip_text.get(), "Hi 2026!")
+                    self.assertEqual((app.count.get(), app.interval.get(), app.strip_count.get()), (3, 10, 4))
+                    self.assert_layout_fits(root, width, height)
+                    self.press(app, "Strip text: on")
+                    self.assertEqual(app.text_entry.get("1.0", "end-1c"), "Hi 2026!")
+                    self.press(app, "Clear")
+                    self.press(app, "Cancel")
+                    self.assertEqual(app.strip_text.get(), "Hi 2026!")
+                    self.press(app, "Strip text: on")
+                    self.press(app, "Clear")
+                    self.press(app, "Save")
+                    self.assertEqual(app.strip_text.get(), "")
+                    self.press(app, "Strip text: off")
+                    app.text_entry.insert("1.0", "W" * 100)
+                    self.press(app, "Save")
+                    self.assertIn("too long", app.text_error.cget("text"))
+                    self.assertEqual(app.strip_text.get(), "")
+                    self.assert_layout_fits(root, width, height)
+                    self.press(app, "Cancel")
+                    self.assertEqual((app.count.get(), app.interval.get(), app.strip_count.get()), (3, 10, 4))
+                finally:
+                    app.close()
 
     def test_options_live_preview_and_print_choices_fit_all_display_sizes(self):
         for compact, portrait, width, height in (

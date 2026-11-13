@@ -114,6 +114,10 @@ must have Tkinter installed because the application imports it.
   successful retry.
 - Print-sheet dimensions/DPI, matching left/right strips, photo order, white
   gaps, EXIF orientation, and unchanged original files for 3/4-photo layouts.
+- Optional message layout: exactly 1,500 pixels for photos and 300 for text;
+  blank/whitespace text restores the full 1,800-pixel photo region. Both strip
+  copies match; text wrapping/fit, long-message rejection, and host launch
+  configuration are checked.
 - Incomplete/unreadable inputs and visible layout failure handling.
 - A simulated clock verifies the first capture waits 15 seconds for all four
   settings combinations, followed by the selected inter-photo countdowns.
@@ -148,6 +152,11 @@ python3 photobooth.py --compact --fullscreen --output "$HOME/Pictures/photobooth
 - [ ] Changing any choice updates the photo-count/countdown/strip summary.
 - [ ] The strip selector offers 2 or 4 and defaults to 2. The summary shows
       1 sheet for 2 strips and 2 sheets for 4 strips.
+- [ ] Tap Strip text and enter a message using the touchscreen keyboard.
+      Check case, number/symbol switching, Space, and Back.
+- [ ] Save returns to options without resetting photo, timer, or strip choices.
+- [ ] Cancel discards edits; Clear followed by Save disables the footer.
+- [ ] Overlong text shows an error without silently truncating or saving it.
 - [ ] Select 3 photos and 5 seconds; tap Start once.
 - [ ] Choices disappear and the countdown remains responsive and readable.
 - [ ] A 15-second positioning countdown appears for either interval selection.
@@ -169,6 +178,13 @@ python3 photobooth.py --compact --fullscreen --output "$HOME/Pictures/photobooth
 
 **Pass:** the entire session works using the LCD without terminal interaction.
 If controls are clipped on the actual LCD resolution, record that as a failure.
+
+Check `print_layout.png` for both 3- and 4-photo sessions, with and without a
+message. Text must occupy only the bottom 300 pixels of each 1,800-pixel strip.
+When blank, the last photo must extend into that former footer area. The message
+should be reused on the next session until edited/cleared, while existing saved
+layouts remain unchanged. Actual printed inch measurements depend on paper and
+driver scaling; Canon's 148 mm height is shorter than a true 6-inch sheet.
 
 ### Optional shutter audio
 

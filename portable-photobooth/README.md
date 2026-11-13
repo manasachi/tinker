@@ -70,6 +70,32 @@ separate from the 3/4 photos on each strip and is retained in the session.
 The summary shows both strip and sheet quantities; the disabled Print button
 also shows the selected strip count. Actual printer integration is still pending.
 
+### Optional text at the bottom of the strip
+
+Tap **Strip text: off/on** beside Start to edit the message. The editor includes
+a touchscreen keyboard: **Aa** changes case, **123/ABC** switches to numbers and
+punctuation, and **Space** and **Back** edit the message. A physical keyboard
+also works. **Save** applies the message; **Cancel** leaves it unchanged.
+**Clear**, then **Save**, removes the message. Your photo/timer/strip choices
+are preserved when returning from the editor.
+
+- With text: the top **5/6** is the photo area and the bottom **1/6** is the
+  message area, for either 3 or 4 photos. Text is centered in dark green on white,
+  wraps automatically, and shrinks to fit. Messages too long to print clearly
+  are rejected instead of cut off.
+- Without text (including only whitespace): photos use the full strip height;
+  no empty message area is reserved. Photo borders and gaps remain.
+
+The host can preset a message when launching:
+
+```sh
+python3 photobooth.py --lcd --strip-text "Happy Birthday, Sam!"
+```
+
+The message remains editable on the LCD and is reused for subsequent sessions
+until changed or cleared. It is not saved as a permanent app setting; restarting
+without `--strip-text` starts with no message.
+
 Ordinary SSH sessions do not inherit the desktop environment. On the current
 Pi, an SSH launch can use:
 
@@ -476,6 +502,10 @@ sudo apt update
 sudo apt install python3-picamera2 python3-pil python3-pil.imagetk python3-tk
 ```
 
+Optional strip text requires Pillow 10.1 or newer for its built-in scalable
+font (the current Trixie Pi has 11.1). Older Bookworm Pillow packages must be
+upgraded before using text; sessions without text do not require this feature.
+
 Copy this folder onto the Pi, open a terminal on its desktop, and run:
 
 ```sh
@@ -513,6 +543,12 @@ this is not continuous-roll printing or automatic cutting.
 
 The photos appear top to bottom in capture order, with white borders and gaps.
 Three-photo layouts use taller slots; four-photo layouts use shorter slots.
+When a message is present, the photo region is exactly 1,500 pixels tall and
+the message region is 300 pixels tall. With no message, the photo region is
+the full 1,800 pixels. Both duplicate strips carry the same message.
+These are nominal 5-inch/1-inch regions on a true 6-inch print. Canon SELPHY
+postcard output is 100 x 148 mm, so the actual regions are approximately
+4.86 inches and 0.97 inches tall; printer scaling/cropping must be checked.
 Photos are EXIF-oriented and center-cropped to fill their slots without stretching.
 Keep faces near the center, as edges may be cropped. Original JPEGs are unchanged;
 the live view shows camera framing rather than the print crop.

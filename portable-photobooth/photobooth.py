@@ -12,8 +12,8 @@ from pathlib import Path
 import struct
 import subprocess
 import tkinter as tk
-from tkinter import messagebox
-from typing import Protocol
+from tkinter import messagebox, ttk
+from typing import Optional, Protocol
 from uuid import uuid4
 import wave
 
@@ -24,6 +24,41 @@ LIME = "#a7c957"
 CREAM = "#f2e8cf"
 RED = "#bc4749"
 POSITIONING_SECONDS = 15
+
+
+def render_strip_footer(text: str):
+    from PIL import Image, ImageDraw, ImageFont
+
+    footer = Image.new("RGB", (600, 300), "white")
+    draw = ImageDraw.Draw(footer)
+    for size in range(64, 27, -2):
+        try:
+            font = ImageFont.load_default(size=size)
+        except TypeError as error:
+            raise RuntimeError("Strip text requires Pillow 10.1 or newer.") from error
+        lines = []
+        for paragraph in text.strip().splitlines():
+            line = ""
+            for word in paragraph.split():
+                candidate = f"{line} {word}".strip()
+                if line and draw.textlength(candidate, font=font) > 540:
+                    lines.append(line)
+                    line = word
+                else:
+                    line = candidate
+            lines.append(line)
+        wrapped = "\n".join(lines)
+        left, top, right, bottom = draw.multiline_textbbox(
+            (0, 0), wrapped, font=font, spacing=8, align="center",
+        )
+        width, height = right - left, bottom - top
+        if width <= 540 and height <= 240:
+            draw.multiline_text(
+                ((600 - width) / 2 - left, (300 - height) / 2 - top),
+                wrapped, font=font, fill=FOREST, spacing=8, align="center",
+            )
+            return footer
+    raise ValueError("Message is too long to print clearly. Please shorten it.")
 
 
 def shutter_wav() -> bytes:
@@ -125,6 +160,7 @@ class Session:
     interval: int
     directory: Path
     strip_count: int = 2
+    strip_text: str = ""
     photos: list[Path] = field(default_factory=list, init=False)
 
     def __post_init__(self) -> None:
@@ -134,6 +170,7 @@ class Session:
             raise ValueError("Choose either a 5 or 10 second timer.")
         if self.strip_count not in (2, 4):
             raise ValueError("Choose either 2 or 4 photo strips.")
+        self.strip_text = self.strip_text.strip()
 
     @property
     def sheet_count(self) -> int:
@@ -154,9 +191,13 @@ class Session:
         if len(self.photos) != self.photo_count:
             raise ValueError("Capture all photos before preparing the print layout.")
         strip_width, height = 600, 1800
+        footer = render_strip_footer(self.strip_text) if self.strip_text else None
+        photo_area_height = height - footer.height if footer is not None else height
         margin, gap = 30, 30
         photo_width = strip_width - 2 * margin
-        photo_height = (height - 2 * margin - gap * (self.photo_count - 1)) // self.photo_count
+        photo_height = (
+            photo_area_height - 2 * margin - gap * (self.photo_count - 1)
+        ) // self.photo_count
         strip = Image.new("RGB", (strip_width, height), "white")
         for index, path in enumerate(self.photos):
             with Image.open(path) as photo:
@@ -166,6 +207,8 @@ class Session:
                     method=Image.Resampling.LANCZOS,
                 )
                 strip.paste(fitted, (margin, margin + index * (photo_height + gap)))
+        if footer is not None:
+            strip.paste(footer, (0, photo_area_height))
         sheet = Image.new("RGB", (strip_width * 2, height), "white")
         sheet.paste(strip, (0, 0))
         sheet.paste(strip, (strip_width, 0))
@@ -229,7 +272,7 @@ class PiCamera:
 class PhotoBooth:
     def __init__(
         self, root: tk.Tk, output: Path, fullscreen: bool, compact: bool = False,
-        portrait: bool = False, shutter_sound: bool = False,
+        portrait: bool = False, shutter_sound: bool = False, strip_text: str = "",
     ) -> None:
         self.root = root
         self.output = output
@@ -251,6 +294,7 @@ class PhotoBooth:
         self.previewing = False
         self.preview_ready = False
         self.image = None
+        self.strip_text = tk.StringVar(master=root, value=strip_text.strip())
         root.title("Portable Photobooth")
         root.geometry(
             "320x480" if self.portrait else "480x320" if self.compact else "800x480"
@@ -282,9 +326,12 @@ class PhotoBooth:
         label.pack(pady=4 if self.compact else 8)
         return label
 
-    def button(self, text: str, command, **options) -> tk.Button:
+    def button(
+        self, text: str, command, parent: Optional[tk.Misc] = None, **options,
+    ) -> tk.Button:
         button = tk.Button(
-            self.frame, text=text, command=command, font=self.font(18, 16),
+            self.frame if parent is None else parent,
+            text=text, command=command, font=self.font(18, 16),
             padx=10 if self.compact else 14, pady=6 if self.compact else 8,
             bg=FOREST, fg=CREAM,
             activebackground=LEAF, activeforeground=CREAM, **options
@@ -292,17 +339,20 @@ class PhotoBooth:
         button.pack(pady=4 if self.compact else 6)
         return button
 
-    def show_options(self) -> None:
+    def show_options(self, *, preserve_choices: bool = False) -> None:
+        count = self.count.get() if preserve_choices else 4
+        interval = self.interval.get() if preserve_choices else 5
+        strips = self.strip_count.get() if preserve_choices else 2
         self.active = False
         self.previewing = False
         self.clear()
         tk.Label(
             self.frame, text="Make a little memory",
             font=self.font(25, 22, bold=True), bg=CREAM, fg=FOREST,
-        ).pack(pady=(4, 10 if self.compact else 16))
-        self.count = tk.IntVar(value=4)
-        self.interval = tk.IntVar(value=5)
-        self.strip_count = tk.IntVar(value=2)
+        ).pack(pady=(4, 6 if self.portrait else 10 if self.compact else 16))
+        self.count = tk.IntVar(value=count)
+        self.interval = tk.IntVar(value=interval)
+        self.strip_count = tk.IntVar(value=strips)
         cards = tk.Frame(self.frame, bg=CREAM)
         cards.pack(fill="x", padx=0 if self.compact else 12)
         cards.columnconfigure(0 if self.portrait else (0, 1, 2), weight=1, uniform="options")
@@ -352,12 +402,128 @@ class PhotoBooth:
         tk.Label(
             self.frame, textvariable=self.summary, font=self.font(12, 12, bold=True),
             bg=CREAM, fg=FOREST,
-        ).pack(pady=(10, 4) if self.compact else (16, 8))
-        self.button("Start photo session", self.start, width=23)
+        ).pack(pady=(6, 2) if self.portrait else (10, 4) if self.compact else (16, 8))
+        actions = tk.Frame(self.frame, bg=CREAM)
+        actions.pack(fill="x")
+        self.button(
+            f"Strip text: {'on' if self.strip_text.get() else 'off'}",
+            self.show_text_settings, parent=actions,
+        ).pack(side="left", expand=True)
+        self.button(
+            "Start session" if self.portrait else "Start photo session",
+            self.start, parent=actions,
+        ).pack(
+            side="left", expand=True,
+        )
         tk.Label(
             self.frame, text=f"You'll have {POSITIONING_SECONDS} seconds to get situated.",
             font=self.font(11, 12), bg=CREAM, fg=FOREST,
         ).pack(pady=(6, 0))
+
+    def show_text_settings(self) -> None:
+        if self.closed or self.active:
+            return
+        self.clear()
+        self.label("Text on your strip", 20)
+        self.text_entry = tk.Text(
+            self.frame, height=2, width=20, wrap="word", font=self.font(14, 14),
+            bg="white", fg=FOREST, insertbackground=FOREST, undo=True,
+        )
+        self.text_entry.pack(fill="x", pady=4)
+        self.text_entry.insert("1.0", self.strip_text.get())
+        self.text_entry.mark_set("insert", "end-1c")
+        self.text_error = tk.Label(
+            self.frame, text="Bottom 1/6 for text; blank = full-height photos.",
+            font=self.font(11, 11), bg=CREAM, fg=FOREST,
+            wraplength=280 if self.portrait else 440 if self.compact else 700,
+        )
+        self.text_error.pack(fill="x", pady=2)
+        self.text_keyboard = tk.Frame(self.frame, bg=CREAM)
+        self.text_keyboard.pack(fill="x")
+        self.keyboard_symbols = False
+        self.keyboard_uppercase = True
+        self.draw_text_keyboard()
+        actions = tk.Frame(self.frame, bg=CREAM)
+        actions.pack(fill="x")
+        for title, command in (
+            ("Cancel", lambda: self.show_options(preserve_choices=True)),
+            ("Clear", lambda: self.text_entry.delete("1.0", "end")),
+            ("Save", self.save_strip_text),
+        ):
+            self.button(title, command, parent=actions).pack(side="left", expand=True)
+        self.text_entry.focus_set()
+
+    def insert_text(self, text: str) -> None:
+        if self.text_entry.tag_ranges("sel"):
+            self.text_entry.delete("sel.first", "sel.last")
+        self.text_entry.insert("insert", text)
+        self.text_entry.see("insert")
+        self.text_entry.focus_set()
+
+    def backspace_text(self) -> None:
+        if self.text_entry.tag_ranges("sel"):
+            self.text_entry.delete("sel.first", "sel.last")
+        else:
+            self.text_entry.delete("insert-1c", "insert")
+        self.text_entry.focus_set()
+
+    def draw_text_keyboard(self) -> None:
+        for widget in self.text_keyboard.winfo_children():
+            widget.destroy()
+        style = ttk.Style(self.root)
+        if "StripKey.border" not in style.element_names():
+            style.element_create("StripKey.border", "from", "clam", "Button.border")
+        style.layout("StripKey.TButton", [
+            ("StripKey.border", {"sticky": "nswe", "children": [
+                ("Button.padding", {"sticky": "nswe", "children": [
+                    ("Button.label", {"sticky": "nswe"}),
+                ]}),
+            ]}),
+        ])
+        style.configure(
+            "StripKey.TButton", font=self.font(14, 14),
+            padding=(2, 10 if self.portrait else 6), borderwidth=1,
+            background=FOREST, foreground=CREAM,
+        )
+        style.map("StripKey.TButton", background=[("pressed", LEAF), ("active", LEAF)])
+        rows = ("1234567890", "-/:&'.,!?", "()@#+=_") if self.keyboard_symbols else (
+            "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM",
+        )
+        self.text_keyboard.columnconfigure(tuple(range(10)), weight=1, uniform="keys")
+
+        def key(title, command, row, column, span=1):
+            ttk.Button(
+                self.text_keyboard, text=title, command=command, style="StripKey.TButton",
+                width=0, takefocus=False,
+            ).grid(row=row, column=column, columnspan=span, sticky="ew", padx=1, pady=1)
+
+        for row, letters in enumerate(rows):
+            for column, letter in enumerate(letters):
+                value = letter if self.keyboard_uppercase else letter.lower()
+                key(value, lambda value=value: self.insert_text(value), row, column)
+
+        def toggle(symbols=False):
+            if symbols:
+                self.keyboard_symbols = not self.keyboard_symbols
+            else:
+                self.keyboard_uppercase = not self.keyboard_uppercase
+            self.draw_text_keyboard()
+
+        key("ABC" if self.keyboard_symbols else "123", lambda: toggle(True), 3, 0, 2)
+        key("Aa", toggle, 3, 2, 2)
+        key("Space", lambda: self.insert_text(" "), 3, 4, 4)
+        key("Back", self.backspace_text, 3, 8, 2)
+
+    def save_strip_text(self) -> None:
+        text = self.text_entry.get("1.0", "end-1c").strip()
+        try:
+            if text:
+                render_strip_footer(text)
+        except (OSError, RuntimeError, ValueError) as error:
+            self.text_error.config(text=str(error), fg=RED)
+            return
+        self.strip_text.set(text)
+        self.show_options(preserve_choices=True)
 
     def update_summary(self, *_args) -> None:
         strips = self.strip_count.get()
@@ -374,7 +540,7 @@ class PhotoBooth:
         name = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:8]
         self.session = Session(
             self.count.get(), self.interval.get(), self.output / name,
-            strip_count=self.strip_count.get(),
+            strip_count=self.strip_count.get(), strip_text=self.strip_text.get(),
         )
         self.active = True
         self.previewing = True
@@ -574,6 +740,10 @@ def main() -> None:
         help="Use the 480x320 layout (also selected automatically on small displays).",
     )
     parser.add_argument("--output", type=Path, default=Path(__file__).parent / "photos")
+    parser.add_argument(
+        "--strip-text", default="",
+        help="Initial optional message for the bottom of each strip; editable on the LCD.",
+    )
     args = parser.parse_args()
     if args.test_sound:
         try:
@@ -581,6 +751,11 @@ def main() -> None:
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
             parser.error(f"Cannot play shutter sound: {error}")
         return
+    if args.strip_text.strip():
+        try:
+            render_strip_footer(args.strip_text)
+        except (OSError, RuntimeError, ValueError) as error:
+            parser.error(f"Cannot use strip text: {error}")
     try:
         geometry = lcd_geometry() if args.lcd else None
     except (OSError, subprocess.CalledProcessError, ValueError, KeyError) as error:
@@ -591,6 +766,7 @@ def main() -> None:
         args.compact or args.lcd,
         args.portrait or (geometry is not None and geometry[0] < geometry[1]),
         args.shutter_sound,
+        args.strip_text,
     )
     if geometry is not None:
         place_on_lcd(root, geometry)
