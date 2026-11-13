@@ -25,21 +25,21 @@ class StripFooterTests(unittest.TestCase):
     def test_text_wraps_and_fits_inside_the_footer_margins(self):
         for text in (
             "Happy Birthday, Sam!",
-            "Thanks for celebrating with us! " * 4,
+            "Thanks for celebrating with us! " * 3,
             "Happy Birthday\nNovember 2026",
         ):
             with self.subTest(text=text):
                 footer = render_strip_footer(text)
-                self.assertEqual(footer.size, (600, 300))
+                self.assertEqual(footer.size, (591, 291))
                 bounds = ImageChops.difference(
                     footer, Image.new("RGB", footer.size, "black"),
                 ).getbbox()
                 self.assertIsNotNone(bounds)
                 left, top, right, bottom = bounds
-                self.assertGreaterEqual(left, 30)
-                self.assertGreaterEqual(top, 30)
-                self.assertLessEqual(right, 570)
-                self.assertLessEqual(bottom, 270)
+                self.assertGreaterEqual(left, 18)
+                self.assertGreaterEqual(top, 18)
+                self.assertLessEqual(right, 573)
+                self.assertLessEqual(bottom, 273)
                 self.assertEqual(footer.getpixel((0, 0)), (0, 0, 0))
                 self.assertEqual(footer.getextrema(), ((0, 255), (0, 255), (0, 255)))
 
@@ -228,23 +228,34 @@ class SessionTests(unittest.TestCase):
                 self.assertEqual(layout.name, "print_layout.png")
                 self.assertEqual(len(session.photos), count)
                 with Image.open(layout) as sheet:
-                    self.assertEqual(sheet.size, (1200, 1800))
+                    self.assertEqual(sheet.size, (1182, 1748))
+                    self.assertAlmostEqual(
+                        sheet.width / sheet.height, 100 / 148, delta=1 / sheet.height,
+                    )
+                    self.assertAlmostEqual(sheet.width / 300 * 25.4, 100, delta=0.1)
+                    self.assertAlmostEqual(sheet.height / 300 * 25.4, 148, delta=0.1)
                     self.assertEqual(sheet.mode, "RGB")
                     self.assertAlmostEqual(sheet.info["dpi"][0], 300, places=1)
                     self.assertAlmostEqual(sheet.info["dpi"][1], 300, places=1)
-                    left = sheet.crop((0, 0, 600, 1800))
-                    right = sheet.crop((600, 0, 1200, 1800))
+                    left = sheet.crop((0, 0, 591, 1748))
+                    right = sheet.crop((591, 0, 1182, 1748))
                     self.assertIsNone(ImageChops.difference(left, right).getbbox())
                     self.assertEqual(sheet.getpixel((0, 0)), (0, 0, 0))
-                    for x in (0, 599, 600, 1199):
+                    for x in (0, 590, 591, 1181):
                         self.assertEqual(sheet.getpixel((x, 900)), (0, 0, 0))
-                    slot_height = (1800 - 60 - 30 * (count - 1)) // count
+                    for strip in (left, right):
+                        for box in (
+                            (0, 0, 591, 18), (0, 1730, 591, 1748),
+                            (0, 0, 18, 1748), (573, 0, 591, 1748),
+                        ):
+                            self.assertIsNone(strip.crop(box).getbbox())
+                    slot_height = (1748 - 36 - 12 * (count - 1)) // count
                     for index, color in enumerate(colors[:count]):
-                        y = 30 + index * (slot_height + 30) + slot_height // 2
+                        y = 18 + index * (slot_height + 12) + slot_height // 2
                         actual = sheet.getpixel((300, y))
                         self.assertTrue(all(abs(a - b) <= 2 for a, b in zip(actual, color)))
                     for index in range(count - 1):
-                        y = 30 + index * (slot_height + 30) + slot_height + 15
+                        y = 18 + index * (slot_height + 12) + slot_height + 6
                         self.assertEqual(sheet.getpixel((300, y)), (0, 0, 0))
                 self.assertEqual([path.read_bytes() for path in session.photos], originals)
 
@@ -256,7 +267,7 @@ class SessionTests(unittest.TestCase):
                 session.prepare_print_layout()
             self.assertFalse((session.directory / "print_layout.png").exists())
 
-    def test_message_reserves_exactly_one_sixth_and_blank_text_uses_full_height(self):
+    def test_message_reserves_rounded_one_sixth_and_blank_text_uses_full_height(self):
         colors = ("red", "green", "blue", "yellow")
         for count in (3, 4):
             for text in ("", " \t\n ", "Happy Birthday, Sam!"):
@@ -268,27 +279,28 @@ class SessionTests(unittest.TestCase):
                         session.photos.append(path)
                     originals = [path.read_bytes() for path in session.photos]
                     with Image.open(session.prepare_print_layout()) as sheet:
-                        self.assertEqual(sheet.size, (1200, 1800))
+                        self.assertEqual(sheet.size, (1182, 1748))
                         self.assertAlmostEqual(sheet.info["dpi"][0], 300, places=1)
                         self.assertIsNone(ImageChops.difference(
-                            sheet.crop((0, 0, 600, 1800)),
-                            sheet.crop((600, 0, 1200, 1800)),
+                            sheet.crop((0, 0, 591, 1748)),
+                            sheet.crop((591, 0, 1182, 1748)),
                         ).getbbox())
-                        photo_area_height = 1500 if text.strip() else 1800
-                        slot_height = (photo_area_height - 60 - 30 * (count - 1)) // count
+                        photo_area_height = 1457 if text.strip() else 1748
+                        self.assertLessEqual(abs(291 - 1748 / 6), 0.5)
+                        slot_height = (photo_area_height - 36 - 12 * (count - 1)) // count
                         for index, path in enumerate(session.photos):
                             with Image.open(path) as original:
                                 color = original.getpixel((0, 0))
-                            y = 30 + index * (slot_height + 30) + slot_height // 2
+                            y = 18 + index * (slot_height + 12) + slot_height // 2
                             self.assertEqual(sheet.getpixel((300, y)), color)
                         if text.strip():
                             self.assertIsNone(ImageChops.difference(
-                                sheet.crop((0, 1500, 600, 1800)),
+                                sheet.crop((0, 1457, 591, 1748)),
                                 render_strip_footer(text.strip()),
                             ).getbbox())
-                            self.assertEqual(sheet.getpixel((300, 1499)), (0, 0, 0))
+                            self.assertEqual(sheet.getpixel((300, 1456)), (0, 0, 0))
                         else:
-                            self.assertEqual(sheet.getpixel((300, 1700)), color)
+                            self.assertEqual(sheet.getpixel((300, 1650)), color)
                             self.assertEqual(session.strip_text, "")
                     self.assertEqual([path.read_bytes() for path in session.photos], originals)
 

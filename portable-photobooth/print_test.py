@@ -1,12 +1,31 @@
-"""Prepare one two-strip sheet using generated circle samples, never personal photos."""
+"""Prepare one two-strip sheet using monochrome circle samples, never personal photos."""
 
 import argparse
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from display_test import load_test_image
+from PIL import Image, ImageDraw, ImageFont
+
 from photobooth import Session
+
+
+def circle_sample(index: int, size: tuple[int, int] = (640, 360)) -> Image.Image:
+    if index not in range(4):
+        raise ValueError("The test has exactly four photos.")
+    image = Image.new("RGB", size, "white")
+    width, height = size
+    radius = min(width, height) // 6
+    draw = ImageDraw.Draw(image)
+    draw.text(
+        (30, 25), f"PHOTO {index + 1} OF 4",
+        fill="black", font=ImageFont.load_default(size=32),
+    )
+    draw.ellipse((
+        width // 2 - radius, height // 2 - radius,
+        width // 2 + radius, height // 2 + radius,
+    ), fill="black")
+    return image
 
 
 def prepare_test_sheet(output: Path, strip_text: str = "") -> Path:
@@ -17,7 +36,7 @@ def prepare_test_sheet(output: Path, strip_text: str = "") -> Path:
     directory.mkdir(parents=True)
     for index in range(4):
         path = directory / f"circle_{index + 1:02d}.png"
-        load_test_image(index).save(path)
+        circle_sample(index, session.photo_size).save(path)
         session.photos.append(path)
     return session.prepare_print_layout()
 

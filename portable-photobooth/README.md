@@ -536,18 +536,28 @@ Photos are not automatically deleted, so monitor available storage.
 ## Print layout and future printing
 
 Each completed session saves its original JPEGs plus `print_layout.png`: a
-**1,200 x 1,800 pixel RGB image at 300 DPI**, intended for a 4 x 6-inch sheet in
-portrait orientation. Each half is a 600 x 1,800 pixel strip (nominally 2 x 6
-inches). Cut the printed sheet vertically down the center to separate the copies;
+**1,182 x 1,748 pixel RGB image at 300 DPI**, sized for SELPHY's **100 x 148 mm**
+postcard paper (rounded to pixels, with an even width for identical halves).
+Each half is a 591 x 1,748 pixel strip, approximately 50 x 148 mm.
+Cut the printed sheet vertically down the center to separate the copies;
 this is not continuous-roll printing or automatic cutting.
 
 The photos appear top to bottom in capture order, with solid black borders and gaps.
+Each strip has an **18-pixel outer black margin** (approximately 1.5 mm
+before scaling) and **12-pixel gaps** between photos (approximately 1 mm).
+The center gutter is 36 pixels across both strips. Four-photo slots are
+555 x 346 with a footer, or 555 x 419 without one. The overall strip retains
+the first print's approximately 50 x 148 mm physical dimensions.
+The thin frame trades away the previous test's extra-wide safety margin;
+actual edge uniformity still needs a physical test. Borderless printer trimming
+cannot be inferred from a successful CUPS job.
 The message area is also black, with white text for contrast. This affects the
 printed layout only; the cream-and-green LCD theme is unchanged.
 Three-photo layouts use taller slots; four-photo layouts use shorter slots.
-When a message is present, the photo region is exactly 1,500 pixels tall and
-the message region is 300 pixels tall. With no message, the photo region is
-the full 1,800 pixels. Both duplicate strips carry the same message.
+When a message is present, the photo region is 1,457 pixels tall and
+the message region is 291 pixels tall (1/6 of the height, rounded to pixels).
+With no message, the photo region is the full 1,748 pixels.
+Both duplicate strips carry the same message.
 These are nominal 5-inch/1-inch regions on a true 6-inch print. Canon SELPHY
 postcard output is 100 x 148 mm, so the actual regions are approximately
 4.86 inches and 0.97 inches tall; printer scaling/cropping must be checked.
@@ -573,7 +583,13 @@ The current Pi has a driverless queue named `SELPHY_CP1500`, connected to
 completion of one generated circle-test sheet (`SELPHY_CP1500-1`) and the queue
 returned to idle. The printer advertised postcard paper loaded and both
 `Postcard` and `Postcard.Borderless` sizes. All 52 tests passed on the Pi,
-including native GUI checks. Physical output quality still needs inspection.
+including native GUI checks. The user reported clipped sample labels and
+uneven/missing outer black edges on this original 1,200 x 1,800 print.
+The next monochrome test (`SELPHY_CP1500-2`) completed with a footer, but the
+user found the 60-pixel margins and padded samples too spacious. The current
+layout retains postcard proportions and uncropped diagnostic samples, keeps
+the first print's overall strip size, and uses a thin frame and tighter gaps. This revision
+has not been physically printed yet.
 
 The test used one copy with `PageSize=Postcard.Borderless`, `print-scaling=fit`,
 `orientation-requested=3`, `sides=one-sided`, and `ColorModel=RGB`.
@@ -591,8 +607,8 @@ this establishes a working test queue, not integrated app printing.
    the **driverless / IPP Everywhere** option. Discovery and available media
    options need checking on the actual printer; do not install an arbitrary
    third-party driver or edit a PPD just to force borderless printing.
-4. Generate the same circle samples used by the LCD diagnostic, arranged as
-   two identical four-photo strips on a single sheet:
+4. Generate monochrome samples (black circles centered on white, with
+   PHOTO X OF 4 labels), arranged as two identical four-photo strips on one sheet:
 
    ```sh
    cd ~/portable-photobooth
@@ -600,7 +616,12 @@ this establishes a working test queue, not integrated app printing.
    ```
 
    This prints the output path but does **not** submit a job. It never reads
-   personal photos. Optionally add `--strip-text "Test party"` to check the footer.
+   personal photos. The next test defaults to **no footer text**, giving photos
+   the full strip height. Add `--strip-text "manupi test"` only when a text test
+   is explicitly wanted.
+   Diagnostic samples are drawn directly at slot size, with no letterbox
+   padding or crop, so the complete PHOTO label survives. Real camera photos
+   still center-crop to fill their slots.
 5. Open that generated PNG in the image viewer and choose Print. Select the
    SELPHY, **one copy**, **one image per sheet**, portrait orientation, and the
    printer's supported **postcard / 100 x 148 mm** paper size. Disable duplex.

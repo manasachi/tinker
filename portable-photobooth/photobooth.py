@@ -24,12 +24,19 @@ LIME = "#a7c957"
 CREAM = "#f2e8cf"
 RED = "#bc4749"
 POSITIONING_SECONDS = 15
+PRINT_SIZE = (1182, 1748)  # 100 x 148 mm at 300 DPI, rounded to an even sheet width.
+STRIP_WIDTH = PRINT_SIZE[0] // 2
+FOOTER_HEIGHT = round(PRINT_SIZE[1] / 6)
+PRINT_MARGIN = 18
+PRINT_GAP = 12
 
 
 def render_strip_footer(text: str):
     from PIL import Image, ImageDraw, ImageFont
 
-    footer = Image.new("RGB", (600, 300), "black")
+    footer = Image.new("RGB", (STRIP_WIDTH, FOOTER_HEIGHT), "black")
+    max_width = STRIP_WIDTH - 2 * PRINT_MARGIN
+    max_height = FOOTER_HEIGHT - 2 * PRINT_MARGIN
     draw = ImageDraw.Draw(footer)
     for size in range(64, 27, -2):
         try:
@@ -41,7 +48,7 @@ def render_strip_footer(text: str):
             line = ""
             for word in paragraph.split():
                 candidate = f"{line} {word}".strip()
-                if line and draw.textlength(candidate, font=font) > 540:
+                if line and draw.textlength(candidate, font=font) > max_width:
                     lines.append(line)
                     line = word
                 else:
@@ -52,9 +59,9 @@ def render_strip_footer(text: str):
             (0, 0), wrapped, font=font, spacing=8, align="center",
         )
         width, height = right - left, bottom - top
-        if width <= 540 and height <= 240:
+        if width <= max_width and height <= max_height:
             draw.multiline_text(
-                ((600 - width) / 2 - left, (300 - height) / 2 - top),
+                ((STRIP_WIDTH - width) / 2 - left, (FOOTER_HEIGHT - height) / 2 - top),
                 wrapped, font=font, fill="white", spacing=8, align="center",
             )
             return footer
@@ -176,6 +183,20 @@ class Session:
     def sheet_count(self) -> int:
         return self.strip_count // 2
 
+    @property
+    def photo_area_height(self) -> int:
+        return PRINT_SIZE[1] - FOOTER_HEIGHT if self.strip_text else PRINT_SIZE[1]
+
+    @property
+    def photo_size(self) -> tuple[int, int]:
+        return (
+            STRIP_WIDTH - 2 * PRINT_MARGIN,
+            (
+                self.photo_area_height - 2 * PRINT_MARGIN
+                - PRINT_GAP * (self.photo_count - 1)
+            ) // self.photo_count,
+        )
+
     def capture_next(self, camera: Camera) -> Path:
         if len(self.photos) >= self.photo_count:
             raise ValueError("All photos in this session have already been taken.")
@@ -190,14 +211,10 @@ class Session:
 
         if len(self.photos) != self.photo_count:
             raise ValueError("Capture all photos before preparing the print layout.")
-        strip_width, height = 600, 1800
+        strip_width, height = STRIP_WIDTH, PRINT_SIZE[1]
         footer = render_strip_footer(self.strip_text) if self.strip_text else None
-        photo_area_height = height - footer.height if footer is not None else height
-        margin, gap = 30, 30
-        photo_width = strip_width - 2 * margin
-        photo_height = (
-            photo_area_height - 2 * margin - gap * (self.photo_count - 1)
-        ) // self.photo_count
+        margin, gap = PRINT_MARGIN, PRINT_GAP
+        photo_width, photo_height = self.photo_size
         strip = Image.new("RGB", (strip_width, height), "black")
         for index, path in enumerate(self.photos):
             with Image.open(path) as photo:
@@ -208,7 +225,7 @@ class Session:
                 )
                 strip.paste(fitted, (margin, margin + index * (photo_height + gap)))
         if footer is not None:
-            strip.paste(footer, (0, photo_area_height))
+            strip.paste(footer, (0, self.photo_area_height))
         sheet = Image.new("RGB", (strip_width * 2, height), "black")
         sheet.paste(strip, (0, 0))
         sheet.paste(strip, (strip_width, 0))

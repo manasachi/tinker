@@ -114,8 +114,8 @@ must have Tkinter installed because the application imports it.
   successful retry.
 - Print-sheet dimensions/DPI, matching left/right strips, photo order, black
   gaps, EXIF orientation, and unchanged original files for 3/4-photo layouts.
-- Optional message layout: exactly 1,500 pixels for photos and 300 for text;
-  blank/whitespace text restores the full 1,800-pixel photo region. Both strip
+- Optional message layout: 1,457 pixels for photos and 291 for text;
+  blank/whitespace text restores the full 1,748-pixel photo region. Both strip
   copies match; text wrapping/fit, long-message rejection, and host launch
   configuration are checked.
 - Incomplete/unreadable inputs and visible layout failure handling.
@@ -180,7 +180,7 @@ python3 photobooth.py --compact --fullscreen --output "$HOME/Pictures/photobooth
 If controls are clipped on the actual LCD resolution, record that as a failure.
 
 Check `print_layout.png` for both 3- and 4-photo sessions, with and without a
-message. Text must occupy only the bottom 300 pixels of each 1,800-pixel strip.
+message. Text must occupy only the bottom 291 pixels of each 1,748-pixel strip.
 Borders, inter-photo gaps, and footer backgrounds must be black; footer text
 must be white. Original camera images and the LCD theme must remain unchanged.
 When blank, the last photo must extend into that former footer area. The message
@@ -191,6 +191,18 @@ driver scaling; Canon's 148 mm height is shorter than a true 6-inch sheet.
 For the first printer test, run `python3 print_test.py` to generate circle
 samples instead of reading personal images. Inspect its generated PNG, then
 print just one sheet using the printer's advertised postcard media settings.
+The next test has **no footer text** by default, using full-height photos.
+An explicit `--strip-text` option still enables a footer.
+Check that the entire PHOTO
+label is visible in all four sample slots; samples must fit without cropping.
+Verify that each strip's outer 18 pixels are black on every side, with 12-pixel
+inter-photo gaps and a 36-pixel center gutter. Circle samples should have no
+extra black letterboxing inside their slots. Four-photo slots should be
+555 x 346 with text, or 555 x 419 without text, retaining the first print's
+overall 50 x 148 mm strip size with an approximately 1.5 mm black frame.
+The 1,182 x 1,748 sheet should match 100 x 148 mm within
+0.1 mm at 300 DPI. Physical borderless trimming still needs a later print;
+do not submit another job until requested.
 The command itself must not send a print job. See the README's CP1500 setup
 section; a generated layout does not verify connectivity or actual output.
 
@@ -240,9 +252,9 @@ For each session:
    for each shot to verify that saved-file order matches capture order.
 5. Start another session and verify its folder is distinct and earlier photos
    have not been overwritten.
-6. Open `print_layout.png`. Check that it is 1,200 x 1,800 pixels with two
+6. Open `print_layout.png`. Check that it is 1,182 x 1,748 pixels with two
    identical strips side by side, each containing exactly the selected number
-   of photos in order. Check white borders/gaps and the center crop of each
+   of photos in order. Check black borders/gaps and the center crop of each
    photo. Original JPEGs should retain their full captured framing.
 
 **Pass:** every combination produces the correct count, ordered readable files,
