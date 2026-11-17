@@ -315,6 +315,10 @@ class PhotoBooth:
         self.previewing = False
         self.preview_ready = False
         self.image = None
+        self.select_input = None
+        self.select_poll = None
+        self.select_target = None
+        self.select_print_enabled = False
         self.strip_text = tk.StringVar(master=root, value=strip_text.strip())
         root.title("Portable Photobooth")
         root.geometry(
@@ -332,9 +336,64 @@ class PhotoBooth:
         self.show_options()
 
     def clear(self) -> None:
+        self.select_target = None
         for widget in self.frame.winfo_children():
             widget.destroy()
         self.image = None
+
+    def enable_select_button(self) -> None:
+        try:
+            from gpiozero import Button
+        except ImportError as error:
+            raise RuntimeError("Install python3-gpiozero to use the physical select button.") from error
+        try:
+            self.select_input = Button(16, pull_up=True)
+            self.select_raw = self.select_input.is_pressed
+        except Exception as error:
+            if self.select_input is not None:
+                self.select_input.close()
+                self.select_input = None
+            raise RuntimeError(f"Cannot open BCM GPIO16 for the select button: {error}") from error
+        self.select_stable = self.select_raw
+        self.select_changed = time.monotonic()
+        self.select_candidate = None
+        self.select_poll = self.root.after(25, self.poll_select_button)
+        logging.getLogger(__name__).info(
+            "Physical select enabled: BCM GPIO16, header pin 36 to ground pin 39",
+        )
+
+    def poll_select_button(self) -> None:
+        self.select_poll = None
+        if self.closed or self.select_input is None:
+            return
+        try:
+            pressed = self.select_input.is_pressed
+        except Exception as error:
+            logging.getLogger(__name__).exception("Physical select input failed")
+            self.select_input.close()
+            self.select_input = None
+            show_error(self.root, "Physical select unavailable", str(error))
+            return
+        now = time.monotonic()
+        if pressed != self.select_raw:
+            self.select_raw = pressed
+            self.select_changed = now
+            self.select_candidate = self.select_target if pressed else None
+        target = None
+        if pressed != self.select_stable and now - self.select_changed >= .1:
+            self.select_stable = pressed
+            if pressed and self.select_candidate is self.select_target:
+                target = self.select_target
+        self.select_poll = self.root.after(25, self.poll_select_button)
+        if (target is not None and target.winfo_exists()
+                and str(target.cget("state")) == "normal"
+                and self.root.grab_current() is None):
+            if target is getattr(self, "print_button", None) and not self.select_print_enabled:
+                self.status.config(text="Button detected; no print sent")
+                logging.getLogger(__name__).info("Physical Print press detected (test only)")
+            else:
+                logging.getLogger(__name__).info("Physical select pressed: %s", target.cget("text"))
+                target.invoke()
 
     def font(self, size: int, compact_size: int, bold: bool = False) -> tuple[str, int, str]:
         # Pixel-sized compact fonts keep the 480x320 layout independent of desktop DPI.
@@ -442,10 +501,11 @@ class PhotoBooth:
             f"Strip text: {'on' if self.strip_text.get() else 'off'}",
             self.show_text_settings, parent=actions,
         ).pack(side="left", expand=True)
-        self.button(
+        self.select_target = self.button(
             "Start session" if self.portrait else "Start photo session",
             self.start, parent=actions,
-        ).pack(
+        )
+        self.select_target.pack(
             side="left", expand=True,
         )
         tk.Label(
@@ -742,11 +802,13 @@ class PhotoBooth:
             f"Print {session.strip_count} {'strip' if session.strip_count == 1 else 'strips'}",
             lambda: self.start_print(session),
         )
+        self.select_target = self.print_button
         self.done_button = self.button("Don't print", self.show_options)
 
     def start_print(self, session: Session) -> None:
         if not self.is_active(session) or self.print_started:
             return
+        self.select_target = None
         self.print_started = True
         self.print_button.config(state="disabled")
         self.done_button.config(state="disabled")
@@ -801,6 +863,12 @@ class PhotoBooth:
 
     def close(self) -> None:
         self.closed = True
+        if self.select_poll is not None:
+            self.root.after_cancel(self.select_poll)
+            self.select_poll = None
+        if self.select_input is not None:
+            self.select_input.close()
+            self.select_input = None
         self.active = False
         self.previewing = False
         cleanup = self.worker.submit(self.camera.close)
@@ -819,6 +887,14 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fullscreen", action="store_true")
+    parser.add_argument(
+        "--select-button", action="store_true",
+        help="Use a normally-open button from header pin 36 (BCM16) to pin 39 (ground).",
+    )
+    parser.add_argument(
+        "--select-button-print", action="store_true",
+        help="Allow the physical select button to submit print jobs (off by default).",
+    )
     parser.add_argument(
         "--shutter-sound", action="store_true",
         help="Play a click after successful captures through the default ALSA audio device.",
@@ -845,6 +921,8 @@ def main() -> None:
         help="Initial optional message for the bottom of each strip; editable on the LCD.",
     )
     args = parser.parse_args()
+    if args.select_button_print and not args.select_button:
+        parser.error("--select-button-print requires --select-button")
     if args.test_sound:
         try:
             play_shutter_sound()
@@ -872,6 +950,13 @@ def main() -> None:
     if geometry is not None:
         place_on_lcd(root, geometry)
         root.bind("<Escape>", lambda event: app.close())
+    if args.select_button:
+        app.select_print_enabled = args.select_button_print
+        try:
+            app.enable_select_button()
+        except RuntimeError as error:
+            logging.getLogger(__name__).exception("Cannot enable physical select button")
+            show_error(root, "Physical select unavailable", str(error))
     root.after_idle(logging.getLogger(__name__).info, "Photobooth UI ready: %s", geometry)
     root.mainloop()
 

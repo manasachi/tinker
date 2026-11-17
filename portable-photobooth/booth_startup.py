@@ -75,7 +75,8 @@ def main() -> None:
     else:
         wait_for_lcd()
         os.execv("/usr/bin/python3", [
-            "/usr/bin/python3", str(Path(__file__).with_name("photobooth.py")), "--lcd",
+            "/usr/bin/python3", str(Path(__file__).with_name("photobooth.py")),
+            "--lcd", "--select-button",
         ])
 
 

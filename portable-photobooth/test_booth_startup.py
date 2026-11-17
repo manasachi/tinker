@@ -5,10 +5,16 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from booth_startup import install, wait_for_lcd
+from booth_startup import install, main, wait_for_lcd
 
 
 class StartupTests(unittest.TestCase):
+    def test_lcd_service_launch_enables_physical_select(self):
+        with patch.object(sys, "argv", ["booth_startup.py", "--run"]), \
+                patch("booth_startup.wait_for_lcd"), patch("booth_startup.os.execv") as execute:
+            main()
+        self.assertEqual(execute.call_args.args[1][-2:], ["--lcd", "--select-button"])
+
     def test_install_is_repeatable_and_keeps_unrelated_desktop_entries(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)

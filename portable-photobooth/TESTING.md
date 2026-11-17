@@ -13,6 +13,29 @@ covers that future split.
 
 ## Phase 1: Pi, LCD, and camera setup
 
+### Physical select button acceptance
+
+- With power disconnected, connect a normally-open momentary switch between
+  physical header pins 36 (BCM16) and 39 (ground). Check for accessory conflicts.
+- Install `python3-gpiozero` and start the booth with `--select-button`
+  (included in normal LCD autostart).
+- Verify a released switch reads high and a pressed switch reads low using
+  an isolated GPIO diagnostic before starting the booth. GPIO claiming alone
+  does not verify the switch: observe an actual press/release transition.
+- Verify one press starts one session; holding and contact bounce do not repeat.
+  Ignore presses during positioning/capture/layout and in the text editor.
+- Use mocked printing for button-flow tests: on print choices, one press invokes
+  Print once; further presses during submission/printing do not resubmit.
+  Do not consume paper for a button diagnostic without explicit authorization.
+- Physical Print is test-only by default: verify "Button detected; no print
+  sent" and no submission. Only an explicit `--select-button-print` launch
+  enables physical printing; normal autostart does not pass that flag.
+- Holding the button at launch must require release before it can activate.
+- Software tests use GPIO Zero's mock pins; physical switch detection and a
+  real-camera session remain separate hardware acceptance checks.
+
+### Pi, LCD, and camera setup procedure
+
 Use Raspberry Pi OS Bookworm or newer with a desktop session.
 
 1. Current hardware is Pi 3B+ + Keyestudio KS0214 (480 x 320 GPIO shield).

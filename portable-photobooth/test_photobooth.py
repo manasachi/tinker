@@ -1,5 +1,6 @@
 from pathlib import Path
 import io
+import importlib.util
 import json
 import os
 import tempfile
@@ -20,6 +21,124 @@ from photobooth import (
     PhotoBooth, PiCamera, Session, lcd_geometry, place_on_lcd, show_error,
     shutter_wav, play_shutter_sound, render_strip_footer, submit_layout, main,
 )
+
+
+@unittest.skipUnless(importlib.util.find_spec("gpiozero"), "Requires python3-gpiozero")
+class SelectButtonTests(unittest.TestCase):
+    def setUp(self):
+        from gpiozero import Device
+        from gpiozero.pins.mock import MockFactory
+
+        self.factory = MockFactory()
+        factory_patch = patch.object(Device, "pin_factory", self.factory)
+        factory_patch.start()
+        self.addCleanup(factory_patch.stop)
+        self.app = object.__new__(PhotoBooth)
+        self.app.root = Mock()
+        self.app.root.grab_current.return_value = None
+        self.app.select_input = None
+        self.app.select_poll = None
+        self.app.closed = False
+        self.target = Mock()
+        self.target.cget.return_value = "normal"
+        self.app.select_target = self.target
+        clock = patch("photobooth.time.monotonic", return_value=0)
+        self.clock = clock.start()
+        self.addCleanup(clock.stop)
+        self.app.enable_select_button()
+        self.addCleanup(self.app.select_input.close)
+
+    def sample(self, pressed, at):
+        pin = self.factory.pin(16)
+        pin.drive_low() if pressed else pin.drive_high()
+        self.clock.return_value = at
+        self.app.poll_select_button()
+
+    def test_bounce_and_holding_produce_one_press_until_stable_release(self):
+        for state, at in (
+            (True, .01), (False, .03), (True, .05), (True, .16),
+            (True, 1), (False, 1.01), (True, 1.03), (True, 1.2),
+        ):
+            self.sample(state, at)
+        self.target.invoke.assert_called_once()
+        self.sample(False, 1.3)
+        self.sample(False, 1.41)
+        self.sample(True, 1.5)
+        self.sample(True, 1.61)
+        self.assertEqual(self.target.invoke.call_count, 2)
+
+    def test_press_does_not_transfer_to_another_screen(self):
+        self.sample(True, .01)
+        replacement = Mock()
+        self.app.select_target = replacement
+        self.sample(True, .12)
+        self.target.invoke.assert_not_called()
+        replacement.invoke.assert_not_called()
+
+    def test_physical_print_does_not_submit_unless_explicitly_enabled(self):
+        self.app.print_button = self.target
+        self.app.status = Mock()
+        self.app.select_print_enabled = False
+        self.sample(True, .01)
+        self.sample(True, .12)
+        self.target.invoke.assert_not_called()
+        self.app.status.config.assert_called_once_with(text="Button detected; no print sent")
+        self.sample(False, .2)
+        self.sample(False, .31)
+        self.app.select_print_enabled = True
+        self.sample(True, .4)
+        self.sample(True, .51)
+        self.target.invoke.assert_called_once()
+
+    def test_modal_disabled_and_inactive_screens_ignore_press(self):
+        for mode in ("modal", "disabled", "inactive"):
+            with self.subTest(mode=mode):
+                self.app.root.grab_current.return_value = Mock() if mode == "modal" else None
+                self.target.cget.return_value = "disabled" if mode == "disabled" else "normal"
+                self.app.select_target = None if mode == "inactive" else self.target
+                self.sample(True, 1)
+                self.sample(True, 1.2)
+                self.sample(False, 2)
+                self.sample(False, 2.2)
+                self.target.invoke.assert_not_called()
+
+    def test_closed_input_reports_failure_and_stops_polling(self):
+        self.app.select_input.close()
+        with patch("photobooth.show_error") as error, self.assertLogs(level="ERROR"):
+            self.app.poll_select_button()
+        error.assert_called_once()
+        self.assertIsNone(self.app.select_input)
+        self.assertIsNone(self.app.select_poll)
+
+    def test_backend_specific_gpio_busy_error_is_reported_as_setup_failure(self):
+        class BackendError(Exception):
+            pass
+
+        self.app.select_input.close()
+        self.app.select_input = None
+        with patch("gpiozero.Button", side_effect=BackendError("GPIO busy")):
+            with self.assertRaisesRegex(RuntimeError, "GPIO16.*GPIO busy"):
+                self.app.enable_select_button()
+        self.assertIsNone(self.app.select_input)
+
+    def test_button_held_when_enabled_requires_release_before_action(self):
+        self.app.select_input.close()
+        held = Mock(is_pressed=True)
+        with patch("gpiozero.Button", return_value=held):
+            self.app.enable_select_button()
+        self.clock.return_value = 1
+        self.app.poll_select_button()
+        self.target.invoke.assert_not_called()
+        held.is_pressed = False
+        self.app.poll_select_button()
+        self.clock.return_value = 1.2
+        self.app.poll_select_button()
+        held.is_pressed = True
+        self.clock.return_value = 2
+        self.app.poll_select_button()
+        self.clock.return_value = 2.2
+        self.app.poll_select_button()
+        self.target.invoke.assert_called_once()
 
 
 class StripFooterTests(unittest.TestCase):
@@ -710,6 +829,35 @@ class PiCameraTests(unittest.TestCase):
     "Set PHOTOBOOTH_GUI_TESTS=1 in a desktop session to test real Tk widgets.",
 )
 class DisplayLayoutTests(unittest.TestCase):
+    def test_physical_select_follows_start_and_print_but_not_text_or_busy_screens(self):
+        with tempfile.TemporaryDirectory() as output:
+            root = tk.Tk()
+            root.withdraw()
+            app = PhotoBooth(root, Path(output), False, portrait=True)
+            try:
+                self.assertIn("Start", app.select_target.cget("text"))
+                app.show_text_settings()
+                self.assertIsNone(app.select_target)
+                app.show_options()
+                with patch.object(app, "request_preview"), patch.object(app, "tick"):
+                    app.select_target.invoke()
+                self.assertTrue(app.active)
+                self.assertIsNone(app.select_target)
+                future = Future()
+                future.set_result(Path("print_layout.png"))
+                app.check_layout(future, app.session)
+                self.assertIs(app.select_target, app.print_button)
+                with patch.object(app.print_worker, "submit") as submit:
+                    app.select_target.invoke()
+                    app.start_print(app.session)
+                submit.assert_called_once()
+                self.assertIsNone(app.select_target)
+                self.assertTrue(app.print_started)
+            finally:
+                for callback in root.tk.call("after", "info"):
+                    root.after_cancel(callback)
+                app.close()
+
     def test_guest_print_button_submits_selected_copies_and_reaches_done(self):
         for strips in (1, 3, 8):
             with self.subTest(strips=strips), tempfile.TemporaryDirectory() as output:

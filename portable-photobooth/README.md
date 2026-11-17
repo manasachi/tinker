@@ -362,8 +362,35 @@ The Start button calls `PhotoBooth.start()`, which creates the session and begin
 the fixed 15-second positioning countdown. The selected interval applies only
 between photos, not before photo 1.
 
-There is no physical GPIO button support or retake button
-in this first version. Use the LCD touchscreen or a mouse.
+### Physical select button
+
+A normally-open momentary button can connect **physical header pin 36
+(BCM GPIO16)** to **physical pin 39 (ground)**. These are physical pin numbers,
+not BCM numbers. GPIO16 uses its internal pull-up; pressing connects it to
+ground. Do not connect this input to 5 V or an externally powered button
+output. Shut down and unplug before changing GPIO wiring, and make sure
+another accessory does not use GPIO16.
+
+Install `sudo apt install python3-gpiozero`. Normal LCD autostart enables the
+button. For a manually launched booth, use:
+
+```sh
+python3 photobooth.py --lcd --select-button
+```
+
+One debounced press invokes **Start session** on the options screen.
+**Physical Print presses are test-only by default:** the print-choice screen
+shows "Button detected; no print sent" without submitting a job. Normal LCD
+autostart keeps this safety setting. Touchscreen Print still submits normally.
+Only after explicit permission to enable real physical-button printing, launch
+with both `--select-button --select-button-print`; it then uses the same Print
+callback and duplicate-submission guard as touch.
+A held button does not repeat; release it before
+pressing again. Holding it at startup does not start a session. Presses during
+capture, layout preparation, printing, text editing, or a modal dialog are
+ignored. It does not navigate dropdowns, retake photos, select Don't print,
+or activate Done. Touch controls remain available. Input setup/read errors
+are logged and shown rather than silently ignored.
 
 ### What appears on the LCD?
 
@@ -888,6 +915,5 @@ Inspired by overtinker's portable photobooth, with different controls and flow.
    integrated direct-wireless printing and automatic LCD startup.
 5. Build a ventilated case with a handle.
 
-A physical GPIO start/confirm/reject button is a possible later addition, not
-required for the touchscreen Submit flow. Retake and single/double-click
-hardware controls are not implemented.
+The physical GPIO select button supports Start and Print; retake, reject,
+and double-click hardware controls are not implemented.
